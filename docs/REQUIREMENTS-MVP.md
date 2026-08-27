@@ -513,6 +513,51 @@ user activates draw-a-box mode.
   chunk crop images as separate files, source images included. For
   interoperability / re-import.
 
+### 12. Features Borrowed from Stylus Labs Write
+
+Stylus Labs Write (github.com/styluslabs/Write) is an open-source handwriting
+note-taker with reflow. It's a different product (stylus-only, vector strokes,
+no typed text), but its source code has patterns we should adopt:
+
+**Dirty-region reflow via scratch fields:**
+Write stores in-progress reflow offsets in a `scratch` field on each element.
+On each reflow pass, it compares the new offset to the previous one (from
+`pendingTransform`), and only redraws elements whose offsets changed. This is
+the concrete implementation of our "dirty-region optimization" — adopt this
+pattern for Scrivio's reflow engine.
+
+**Undo system:**
+Write uses a proper command pattern with typed undo items:
+- `StrokeAddedItem` / `StrokeDeletedItem` (with next-element pointer for z-order)
+- `StrokeTranslateItem` (stores dx, dy offset)
+- `StrokeTransformItem` (stores full transform matrix)
+- `StrokeChangedItem` (stores old properties for swap-back)
+- `UndoGroupHeader` (groups actions by page)
+Adopt this hierarchy for Scrivio: `ElementInsertedItem`, `ElementDeletedItem`,
+`ElementMovedItem`, `ElementChangedItem`, grouped by user action.
+
+**Ruled selection:**
+Write has a `RuledSelector` that selects elements by line number (based on
+page ruling). Supports selecting a line range, or everything after a line.
+Adopt this for Scrivio — selecting elements by their line position, not just
+bounding box.
+
+**Bookmarks:**
+Write lets users bookmark positions and create handwritten links between them.
+Add bookmarks to Scrivio as named positions in the document with link support.
+
+**Clippings:**
+Write lets users save selections as reusable clippings. Add this to Scrivio —
+save chunks or typed text as reusable snippets.
+
+**Split view:**
+Write supports working on two parts of the same document side by side.
+Add split view to Scrivio.
+
+**Auto-growing pages:**
+Write's pages grow automatically when content approaches the edge. Adopt this
+for Scrivio's infinite document model — pages grow as needed.
+
 ---
 
 ## Technical Decisions
