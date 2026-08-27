@@ -1,4 +1,4 @@
-# Scrivo — MVP Requirements
+# Scrivio — MVP Requirements
 
 > A word processor that starts with a photo of handwriting and lets you edit the words
 > as opaque image chunks — no OCR, no transcription, just segmentation and layout.

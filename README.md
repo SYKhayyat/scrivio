@@ -1,11 +1,11 @@
-# Scrivo
+# Scrivio
 
 > A word processor that starts with a photo of handwriting.
 
 ## The Idea
 
 You have handwritten notes — on paper, in a notebook, on a whiteboard. Instead of
-transcribing them (OCR), Scrivo lifts the words off the page as opaque image blobs
+transcribing them (OCR), Scrivio lifts the words off the page as opaque image blobs
 called **chunks**. Each chunk is one word, preserved exactly as you wrote it.
 
 Then you edit the document using familiar word processor tools: insert text between

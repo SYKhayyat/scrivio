@@ -1,4 +1,4 @@
-# Scrivo — V2+ Roadmap
+# Scrivio — V2+ Roadmap
 
 > Future features and capabilities beyond the MVP. Organized by rough priority,
 > not strict version numbering.
