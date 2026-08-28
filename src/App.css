@@ -1,0 +1,43 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #f3f1ec; color: #1a1a1a; }
+.app { display: flex; flex-direction: column; height: 100%; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fff; border-bottom: 1px solid #ddd; flex-wrap: wrap; }
+.toolbar-group { display: flex; gap: 4px; align-items: center; }
+.toolbar-sep { width: 1px; height: 24px; background: #ddd; }
+.toolbar-spacer { flex: 1; }
+.toolbar button { padding: 6px 10px; border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.toolbar button:hover { background: #f0f0f0; }
+.toolbar button:disabled { opacity: 0.4; cursor: default; }
+.toolbar button.active { background: #2a5bd7; color: white; border-color: #1a46b0; }
+.toolbar input[type="range"] { width: 90px; }
+
+.document-view { flex: 1; overflow: auto; padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 0; position: relative; outline: none; }
+.ruler-h { height: 20px; background: repeating-linear-gradient(90deg, #ddd 0 1px, transparent 1px 10px); border: 1px solid #ccc; border-bottom: none; }
+.page { overflow: hidden; }
+.canvas-layer { pointer-events: none; }
+.dom-layer { font-size: 14px; }
+.caret { display: inline-block; width: 2px; height: 1.1em; background: #111; vertical-align: text-bottom; animation: blink 1s step-end infinite; margin-left: 1px; }
+@keyframes blink { 50% { opacity: 0; } }
+.page-break { position: absolute; left: 0; right: 0; height: 1px; background: #b0b0b0; border-top: 1px dashed #999; pointer-events: none; }
+.draw-rect { position: absolute; border: 2px solid #2a5bd7; background: rgba(42,91,215,0.15); pointer-events: none; }
+.hidden-input { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+.empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 40px; text-align: center; }
+.empty-state h1 { font-size: 40px; margin: 0; letter-spacing: -1px; }
+.muted { color: #777; font-size: 13px; }
+button.primary { background: #2a5bd7; color: white; border-color: #1a46b0; }
+button.primary.large { padding: 14px 22px; font-size: 16px; border-radius: 10px; }
+.demo-actions { display: flex; gap: 8px; margin-top: 8px; }
+.demo-actions button { padding: 6px 10px; border: 1px solid #ccc; background: white; border-radius: 6px; cursor: pointer; }
+.segmenting-banner { background: #fff3cd; border-bottom: 1px solid #ffc107; padding: 8px; text-align: center; font-size: 13px; }
+
+.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.dialog { background: white; border-radius: 12px; padding: 24px; min-width: 440px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.dialog h2 { margin: 0 0 8px; }
+.field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
+.field span { font-size: 13px; font-weight: 600; }
+.field input, .field select { padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+.file-list { font-size: 13px; color: #444; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.dialog-actions button { padding: 8px 14px; border-radius: 6px; border: 1px solid #ccc; background: white; cursor: pointer; }

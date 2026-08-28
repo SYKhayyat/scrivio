@@ -1,0 +1,35 @@
+{
+  "name": "scrivio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A word processor that starts with a photo of handwriting — no OCR, just segmentation and layout.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "wasm:build": "wasm-pack build crates/scrivio-wasm --target web --out-dir ../../src/wasm-pkg",
+    "wasm:dev": "cargo build --manifest-path crates/scrivio-wasm/Cargo.toml --target wasm32-unknown-unknown"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vitest": "^3.0.8"
+  }
+}

@@ -40,9 +40,25 @@ layers (canvas for chunks, DOM for typed text) read from the same list.
 - **Rendering**: Canvas + DOM hybrid
 - **Storage**: IndexedDB (local, V1)
 
+## Quick Start
+
+```bash
+nix shell nixpkgs#nodejs_24 --command bash -c 'npm install && npm run dev'
+# open http://localhost:5173
+```
+
+## Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Vite dev server |
+| `npm run build` | Typecheck + production build |
+| `npm test` | Vitest (jsdom) |
+| `npx tsc --noEmit` | Typecheck |
+
 ## Project Status
 
-🚧 **Requirements complete** — ready to build.
+✅ **V1 built** — modular, SOLID, tested. See [Architecture](docs/ARCHITECTURE.md).
 
 ## Docs
 
