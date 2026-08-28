@@ -1,10 +1,13 @@
 /**
- * Optional Rust → WebAssembly backend.
+ * Rust → WebAssembly backend.
  *
- * The WASM bundle is produced by `npm run wasm:build` (wasm-pack) and copied
- * to `public/wasm/`. When it is present, the heavy image-pipeline work
- * (segmentation, cropping) runs in Rust. When it is absent, the TypeScript
- * engines are used instead — the app behaves the same either way.
+ * The heavy image-pipeline work — segmentation, cropping and reflow — runs in
+ * Rust via `crates/scrivio-wasm`, built by `npm run wasm:build` into
+ * `src/wasm-pkg/` (gitignored apart from its `.d.ts` type files). Rust is the
+ * engine, not an optional extra: build/dev guard on the bundle and fail loudly
+ * if it is missing rather than silently degrading. A faithful TypeScript
+ * implementation exists only for the jsdom unit tests, which cannot instantiate
+ * a wasm module.
  */
 
 export type WasmChunk = {
@@ -65,9 +68,11 @@ export function loadWasmBackend(): Promise<WasmBackend | null> {
   if (!cached) {
     cached = (async () => {
       try {
-        // The bundle lives in src/wasm-pkg (built by `npm run wasm:build`;
-        // gitignored). If it is ever absent, the import fails and the app falls
-        // back to the TypeScript engines.
+        // Resolved from `src/wasm-pkg/` (build output from `npm run wasm:build`,
+        // gitignored apart from the `.d.ts` type files). The build is required —
+        // the Rust/WASM engine is the real engine, not an optional extra — so
+        // without the bundle the pipeline fails loudly rather than silently
+        // degrading to the TypeScript fallback.
         const mod = (await import('../../wasm-pkg/scrivio_wasm.js')) as {
           default?: () => Promise<unknown>;
           segment_image?: WasmBackend['segment_image'];

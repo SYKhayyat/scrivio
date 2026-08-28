@@ -1,6 +1,29 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 
+// Regression guard for the Rust engine: segmentation must run through the real
+// WASM binary, never silently fall back to the TypeScript engine. If the
+// bundle is ever missing at runtime the browser simply won't fetch the .wasm
+// and this fails loudly. Mirrors the intent of ksav's wasm-smoke.mjs.
+test('the Rust/WASM engine is what runs segmentation (the .wasm binary is fetched)', async ({ page }) => {
+  const wasmFetched: string[] = [];
+  page.on('request', (r) => {
+    if (/\.wasm$/i.test(r.url())) wasmFetched.push(r.url());
+  });
+
+  await page.goto('/');
+  const fileInput = page.locator('.source-pane input[type="file"]');
+  await fileInput.setInputFiles(path.resolve('public/test-images/handwriting2.jpg'));
+  await expect(page.locator('.source-tab-name')).toContainText('handwriting2.jpg');
+  // Auto-segmentation runs; wait for chunk boxes to appear.
+  await expect(page.locator('.import-chunk').first()).toBeVisible({ timeout: 20000 });
+  expect(await page.locator('.import-chunk').count()).toBeGreaterThan(0);
+
+  // Let any wasm fetch settle, then assert the Rust binary was requested.
+  await page.waitForTimeout(500);
+  expect(wasmFetched.some((u) => /\.wasm$/i.test(u)), 'expected the .wasm binary to be fetched').toBeTruthy();
+});
+
 test.describe('Scrivio — human verification', () => {
   test('empty state + typing + formatting as a human would', async ({ page }) => {
     await page.goto('/');

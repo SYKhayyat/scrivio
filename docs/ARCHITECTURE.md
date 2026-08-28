@@ -18,16 +18,19 @@ src/
   components/     # React UI — MenuBar, Toolbar, StatusBar, ImportDialog, DocumentView
   hooks/          # useDocument handle
   utils/          # measure-text, export, ids
-  wasm-pkg/       # Built Rust/WASM bundle (gitignored; rebuild via `npm run wasm:build`)
-crates/scrivio-wasm/  # Rust engine (wasm-bindgen) — segmentation, crop, reflow; TS mirrors it
+  wasm-pkg/       # Built Rust/WASM bundle (gitignored except the .d.ts type files; rebuild via `npm run wasm:build`)
+crates/scrivio-wasm/  # Rust engine (wasm-bindgen) — segmentation, crop, reflow
 ```
 
 **Rust is the engine. TypeScript is the UI.** Every computational stage —
 segmentation, chunk cropping, and reflow/layout — lives in
-`crates/scrivio-wasm` and runs as WebAssembly. The TS modules in `engine/` are
-thin adapters that call the wasm backend and fall back to a faithful TS
-implementation only when the bundle is absent (e.g. jsdom tests). Reflow uses a
-flat typed-array boundary (`reflow_flat`) so per-keystroke layout avoids serde
+`crates/scrivio-wasm` and runs as WebAssembly. It is a required dependency, not
+an optional extra: `npm run dev`/`build` guard on the bundle and fail with a
+clear message if it is missing. The TS modules in `engine/` are thin adapters
+that call the wasm backend; a faithful TS implementation exists only so the
+jsdom unit tests can run deterministically (jsdom has no wasm runtime), and
+`scripts/wasm-smoke.mjs` exercises the real module in Node. Reflow uses a flat
+typed-array boundary (`reflow_flat`) so per-keystroke layout avoids serde
 overhead.
 
 ## SOLID mapping

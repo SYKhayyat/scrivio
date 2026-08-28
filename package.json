@@ -5,7 +5,9 @@
   "type": "module",
   "description": "A word processor that starts with a photo of handwriting — no OCR, just segmentation and layout.",
   "scripts": {
+    "predev": "node scripts/require-wasm.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/require-wasm.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -14,6 +16,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "wasm:build": "wasm-pack build crates/scrivio-wasm --target web --out-dir ../../src/wasm-pkg",
+    "wasm:smoke": "node scripts/wasm-smoke.mjs",
     "wasm:dev": "cargo build --manifest-path crates/scrivio-wasm/Cargo.toml --target wasm32-unknown-unknown"
   },
   "dependencies": {
