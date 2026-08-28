@@ -4,3 +4,4 @@ src/wasm-pkg
 coverage
 *.local
 .DS_Store
+target/

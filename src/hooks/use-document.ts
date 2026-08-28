@@ -36,50 +36,52 @@ export function useDocument(initial?: DocumentModel) {
   const insertElement = useCallback(
     (el: DocumentElement, index?: number) => {
       const at = index ?? model.getCursor().index;
-      const next = [...elements];
+      const base = [...(model.getElements() as DocumentElement[])];
       if (el.kind === 'typed-word') {
         const m = measureTypedWord(el.text, el.fontFamily, el.fontSize, el.bold, el.italic);
         el.width = m.width;
         el.height = m.height;
       }
-      next.splice(at, 0, el);
+      base.splice(at, 0, el);
       undoRef.current.push({ type: 'insert', index: at, element: el });
+      commit(base, Math.max(0, at - 5));
       model.setCursor(at + 1);
-      commit(next, Math.max(0, at - 5));
+      setCursor(model.getCursor());
     },
-    [elements, model, commit],
+    [model, commit],
   );
 
   const deleteAt = useCallback(
     (index: number) => {
-      if (index < 0 || index >= elements.length) return;
-      const el = elements[index];
-      const next = [...elements];
-      next.splice(index, 1);
+      const base = [...(model.getElements() as DocumentElement[])];
+      if (index < 0 || index >= base.length) return;
+      const el = base[index];
+      base.splice(index, 1);
       undoRef.current.push({ type: 'delete', index, element: el });
-      model.setCursor(Math.min(index, next.length));
-      commit(next, Math.max(0, index - 5));
+      commit(base, Math.max(0, index - 5));
+      model.setCursor(Math.min(index, base.length));
+      setCursor(model.getCursor());
     },
-    [elements, model, commit],
+    [model, commit],
   );
 
   const undo = useCallback(() => {
     if (!undoRef.current.canUndo()) return;
-    const next = [...elements];
-    undoRef.current.undo(next);
-    const positioned = reflow(next, 0);
+    const base = [...(model.getElements() as DocumentElement[])];
+    undoRef.current.undo(base);
+    const positioned = reflow(base, 0);
     setElements(positioned);
     model.setElements(positioned);
-  }, [elements, model, reflow]);
+  }, [model, reflow]);
 
   const redo = useCallback(() => {
     if (!undoRef.current.canRedo()) return;
-    const next = [...elements];
-    undoRef.current.redo(next);
-    const positioned = reflow(next, 0);
+    const base = [...(model.getElements() as DocumentElement[])];
+    undoRef.current.redo(base);
+    const positioned = reflow(base, 0);
     setElements(positioned);
     model.setElements(positioned);
-  }, [elements, model, reflow]);
+  }, [model, reflow]);
 
   const value = useMemo(
     () => ({

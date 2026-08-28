@@ -127,20 +127,21 @@ export default function App() {
         onZoom={setZoom}
       />
       {segmenting && <div className="segmenting-banner">Segmenting handwriting…</div>}
-      {doc.elements.length === 0 && !segmenting ? (
-        <div className="empty-state">
-          <h1>Scrivio</h1>
-          <p>A word processor that starts with a photo of handwriting.</p>
-          <button className="primary large" onClick={() => setUploadOpen(true)}>Drop a photo of handwriting here, or click Upload</button>
-          <p className="muted">No OCR — your handwriting stays as image chunks.</p>
-          <div className="demo-actions">
-            <button onClick={() => insertDemoText(doc)}>Insert demo typed text</button>
-            <button onClick={() => insertDemoChunks(doc)}>Insert demo chunks</button>
-          </div>
-        </div>
-      ) : (
+      <div style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <DocumentView doc={doc} zoom={zoom} drawMode={drawMode} onDrawRect={handleDrawRect} />
-      )}
+        {doc.elements.length === 0 && !segmenting && (
+          <div className="empty-state" style={{ position: 'absolute', inset: 0, background: 'rgba(243,241,236,0.92)', zIndex: 1, pointerEvents: 'none' }}>
+            <h1>Scrivio</h1>
+            <p>A word processor that starts with a photo of handwriting.</p>
+            <button className="primary large" style={{ pointerEvents: 'auto' }} onClick={() => setUploadOpen(true)}>Drop a photo of handwriting here, or click Upload</button>
+            <p className="muted">No OCR — your handwriting stays as image chunks. Or just start typing.</p>
+            <div className="demo-actions" style={{ pointerEvents: 'auto' }}>
+              <button onClick={() => insertDemoText(doc)}>Insert demo typed text</button>
+              <button onClick={() => insertDemoChunks(doc)}>Insert demo chunks</button>
+            </div>
+          </div>
+        )}
+      </div>
       <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onUpload={handleUpload} />
     </div>
   );

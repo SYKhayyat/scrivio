@@ -35,9 +35,12 @@ export function DocumentView({ doc, zoom, drawMode, onDrawRect }: Props) {
   }, []);
 
   const focusInput = useCallback(() => hiddenInputRef.current?.focus(), []);
+  const docRef = useRef(doc);
+  docRef.current = doc;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const doc = docRef.current;
       if (e.ctrlKey || e.metaKey) {
         if (e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); doc.undo(); }
         if (e.key.toLowerCase() === 'z' && e.shiftKey) { e.preventDefault(); doc.redo(); }
@@ -49,44 +52,70 @@ export function DocumentView({ doc, zoom, drawMode, onDrawRect }: Props) {
         const sel = doc.model.getSelection();
         if (sel) {
           const [s, e2] = [Math.min(sel.anchor, sel.focus), Math.max(sel.anchor, sel.focus)];
-          const next = [...doc.elements]; next.splice(s, e2 - s); doc.commit(next, s); doc.model.clearSelection();
-        } else if (doc.cursor.index > 0) doc.deleteAt(doc.cursor.index - 1);
+          const next = [...doc.model.getElements() as DocumentElement[]]; next.splice(s, e2 - s); doc.commit(next, s); doc.model.clearSelection(); doc.setCursor(s);
+        } else {
+          const cur = doc.model.getCursor().index;
+          if (cur > 0) doc.deleteAt(cur - 1);
+        }
       } else if (e.key === 'Delete') {
         e.preventDefault();
-        doc.deleteAt(doc.cursor.index);
+        doc.deleteAt(doc.model.getCursor().index);
       } else if (e.key === 'ArrowLeft') {
-        e.preventDefault(); doc.setCursor(Math.max(0, doc.cursor.index - 1));
+        e.preventDefault(); doc.setCursor(Math.max(0, doc.model.getCursor().index - 1));
       } else if (e.key === 'ArrowRight') {
-        e.preventDefault(); doc.setCursor(Math.min(doc.elements.length, doc.cursor.index + 1));
+        e.preventDefault(); doc.setCursor(Math.min(doc.model.getElements().length, doc.model.getCursor().index + 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault(); moveVertical(doc, -1);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault(); moveVertical(doc, 1);
       } else if (e.key === 'Home') {
-        e.preventDefault(); doc.setCursor(lineStart(doc.elements, doc.cursor.index));
+        e.preventDefault(); doc.setCursor(lineStart(doc.model.getElements() as DocumentElement[], doc.model.getCursor().index));
       } else if (e.key === 'End') {
-        e.preventDefault(); doc.setCursor(lineEnd(doc.elements, doc.cursor.index));
+        e.preventDefault(); doc.setCursor(lineEnd(doc.model.getElements() as DocumentElement[], doc.model.getCursor().index));
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const kind = e.shiftKey ? 'paragraph-break' : 'line-break';
         doc.insertElement({ kind, id: crypto.randomUUID(), x: 0, y: 0, width: 0, height: 0 } as never);
-      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        const settings = doc.model.getSettings();
-        const typed: DocumentElement = {
-          kind: 'typed-word', id: crypto.randomUUID(), text: e.key,
-          fontFamily: settings.defaultFontFamily, fontSize: settings.defaultFontSize,
-          bold: false, italic: false, underline: false, x: 0, y: 0, width: 4, height: 4,
-        };
-        doc.insertElement(typed);
       } else if (e.key === ' ') {
         e.preventDefault();
         const settings = doc.model.getSettings();
-        doc.insertElement({
-          kind: 'typed-word', id: crypto.randomUUID(), text: ' ',
-          fontFamily: settings.defaultFontFamily, fontSize: settings.defaultFontSize,
-          bold: false, italic: false, underline: false, x: 0, y: 0, width: 2, height: 4,
-        });
+        const cur = doc.model.getCursor().index;
+        const els = doc.model.getElements() as DocumentElement[];
+        const prev = els[cur - 1];
+        if (prev?.kind === 'typed-word' && prev.text !== ' ' && !prev.bold && !prev.italic && !prev.underline) {
+          const next = { ...prev, text: prev.text + ' ' } as typeof prev;
+          const arr = [...els];
+          arr[cur - 1] = next;
+          doc.commit(arr, cur - 1);
+          doc.setCursor(cur);
+        } else {
+          doc.insertElement({
+            kind: 'typed-word', id: crypto.randomUUID(), text: ' ',
+            fontFamily: settings.defaultFontFamily, fontSize: settings.defaultFontSize,
+            bold: false, italic: false, underline: false, x: 0, y: 0, width: 2, height: 4,
+          });
+        }
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const cur = doc.model.getCursor().index;
+        const els = doc.model.getElements() as DocumentElement[];
+        const settings = doc.model.getSettings();
+        const prev = els[cur - 1];
+        const canCoalesce = prev?.kind === 'typed-word' && prev.fontFamily === settings.defaultFontFamily && prev.fontSize === settings.defaultFontSize && !prev.bold && !prev.italic && !prev.underline && e.key !== ' ';
+        if (canCoalesce) {
+          const next = { ...prev, text: (prev as Extract<DocumentElement, { kind: 'typed-word' }>).text + e.key } as DocumentElement;
+          const arr = [...els];
+          arr[cur - 1] = next;
+          doc.commit(arr, cur - 1);
+          doc.setCursor(cur);
+        } else {
+          const typed: DocumentElement = {
+            kind: 'typed-word', id: crypto.randomUUID(), text: e.key,
+            fontFamily: settings.defaultFontFamily, fontSize: settings.defaultFontSize,
+            bold: false, italic: false, underline: false, x: 0, y: 0, width: 4, height: 4,
+          };
+          doc.insertElement(typed);
+        }
       }
     };
     window.addEventListener('keydown', handler);
