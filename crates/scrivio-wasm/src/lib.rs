@@ -429,15 +429,25 @@ fn group_into_words(blobs: &[BlobRect]) -> Vec<Chunk> {
 #[derive(Clone)]
 struct ScaledRegion { x: f64, y: f64, w: f64, h: f64, columns: u32, dividers: Vec<f64> }
 
-/// Orders chunks in reading order.
+/// Orders chunks in reading order (regions → columns → lines → within a line).
+fn order_chunks_with_regions(chunks: Vec<Chunk>, direction: Direction, regions: &[ScaledRegion], columns: Option<u32>) -> Vec<Chunk> {
+    let ordered = reading_order(&chunks, direction, regions, columns);
+    ordered.into_iter().map(|(_, c)| c).collect()
+}
+
+/// Sort chunks into reading order.
 ///
 /// Region-aware, column-major: regions read in the order given, then columns
 /// within a region (rightmost first for RTL, leftmost first for LTR), then
 /// lines top-to-bottom, then left/right within a line. Without regions the
 /// whole image is treated as a single region with `columns` equal splits —
 /// so a 2-column page reads column 1 fully, then column 2.
-fn order_chunks_with_regions(mut chunks: Vec<Chunk>, direction: Direction, regions: &[ScaledRegion], columns: Option<u32>) -> Vec<Chunk> {
-    if chunks.is_empty() { return chunks; }
+///
+/// Returns `(original_index, chunk)` pairs so callers can either keep the
+/// reordered chunks (segmentation) or map indices back onto their own objects
+/// (the `order_chunks` wasm export used for building import entries).
+fn reading_order(chunks: &[Chunk], direction: Direction, regions: &[ScaledRegion], columns: Option<u32>) -> Vec<(usize, Chunk)> {
+    if chunks.is_empty() { return vec![]; }
     let effective: Vec<ScaledRegion> = if regions.is_empty() {
         let cols = match columns { Some(c) if c > 1 => c.min(6), _ => 1 };
         let min_x = chunks.iter().map(|c| c.x).min().unwrap_or(0) as f64;
@@ -467,9 +477,10 @@ fn order_chunks_with_regions(mut chunks: Vec<Chunk>, direction: Direction, regio
     }
 
     // Assign each chunk to the first region containing its center (outside = last).
-    let mut assigned: Vec<(usize, u32, Chunk)> = chunks
-        .into_iter()
-        .map(|c| {
+    let mut assigned: Vec<(usize, u32, usize, Chunk)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(orig, c)| {
             let cx = c.x as f64 + c.w as f64 / 2.0;
             let cy = c.y as f64 + c.h as f64 / 2.0;
             let mut region_idx = effective.len();
@@ -477,15 +488,15 @@ fn order_chunks_with_regions(mut chunks: Vec<Chunk>, direction: Direction, regio
             for (i, r) in effective.iter().enumerate() {
                 if cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h {
                     region_idx = i;
-                    col = column_index(&c, r, direction);
+                    col = column_index(c, r, direction);
                     break;
                 }
             }
-            (region_idx, col, c)
+            (region_idx, col, orig, c.clone())
         })
         .collect();
 
-    let mut hs: Vec<u32> = assigned.iter().map(|a| a.2.h).collect();
+    let mut hs: Vec<u32> = assigned.iter().map(|a| a.3.h).collect();
     hs.sort_unstable();
     let median_h = hs[hs.len() / 2] as f64;
     let line_tolerance = median_h * 0.5;
@@ -493,16 +504,86 @@ fn order_chunks_with_regions(mut chunks: Vec<Chunk>, direction: Direction, regio
     assigned.sort_by(|a, b| {
         if a.0 != b.0 { return a.0.cmp(&b.0); }
         if a.1 != b.1 { return a.1.cmp(&b.1); }
-        let ya = a.2.y as f64 + a.2.h as f64 / 2.0;
-        let yb = b.2.y as f64 + b.2.h as f64 / 2.0;
+        let ya = a.3.y as f64 + a.3.h as f64 / 2.0;
+        let yb = b.3.y as f64 + b.3.h as f64 / 2.0;
         if (ya - yb).abs() > line_tolerance { return ya.partial_cmp(&yb).unwrap(); }
         match direction {
-            Direction::Rtl => (b.2.x + b.2.w).cmp(&(a.2.x + a.2.w)),
-            _ => a.2.x.cmp(&b.2.x),
+            Direction::Rtl => (b.3.x + b.3.w).cmp(&(a.3.x + a.3.w)),
+            _ => a.3.x.cmp(&b.3.x),
         }
     });
 
-    assigned.into_iter().map(|a| a.2).collect()
+    assigned.into_iter().map(|(_, _, orig, c)| (orig, c)).collect()
+}
+
+/// Reading-order sort for chunks about to be inserted (the app's "build
+/// import entries" step). Mirrors the TS `orderChunksByRegions` twin: regions
+/// read in the order given, then columns within a region (rightmost first for
+/// RTL), then lines top-to-bottom, then left/right within a line. Returns the
+/// input indices in reading order; the TS side maps them back onto its own
+/// chunk objects.
+#[wasm_bindgen]
+pub fn order_chunks(
+    xs: &[f64],
+    ys: &[f64],
+    ws: &[f64],
+    hs: &[f64],
+    direction_js: JsValue,
+    columns: u32,
+    regions_js: JsValue,
+) -> Vec<u32> {
+    let direction: Direction = serde_wasm_bindgen::from_value(direction_js).unwrap_or(Direction::Ltr);
+    let regions: Vec<ImportRegion> = if regions_js.is_null() || regions_js.is_undefined() {
+        vec![]
+    } else {
+        serde_wasm_bindgen::from_value(regions_js).unwrap_or_default()
+    };
+    let n = xs.len();
+    let chunks: Vec<Chunk> = (0..n)
+        .map(|i| Chunk {
+            x: xs[i].round().max(0.0) as u32,
+            y: ys[i].round().max(0.0) as u32,
+            w: ws[i].round().max(0.0) as u32,
+            h: hs[i].round().max(0.0) as u32,
+            area: 0,
+            line_index: 0,
+        })
+        .collect();
+    let scaled_regions: Vec<ScaledRegion> = regions
+        .iter()
+        .map(|r| ScaledRegion {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+            columns: r.columns.max(1).min(6),
+            dividers: r.dividers.clone(),
+        })
+        .collect();
+    let ordered = reading_order(&chunks, direction, &scaled_regions, if columns > 1 { Some(columns) } else { None });
+    ordered.into_iter().map(|(i, _)| i as u32).collect()
+}
+
+/// Per-element page assignment for PDF export. Given the laid-out element
+/// y-positions (mm) and the usable body height, returns a flat array
+/// `[page0, y0, page1, y1, …]` where each page is the 0-based page the element
+/// lands on and each y is the element's offset within that page's body region.
+/// The page-splitting math that used to live in the TS exporter runs here; the
+/// TS side only converts mm→pt and issues the pdf-lib draw calls.
+#[wasm_bindgen]
+pub fn pdf_page_layout(ys: &[f64], body_height_mm: f64) -> Vec<f64> {
+    let mut out = Vec::with_capacity(ys.len() * 2);
+    let mut page: f64 = 0.0;
+    let mut page_offset: f64 = 0.0;
+    for &y in ys {
+        if y >= page_offset + body_height_mm {
+            page += 1.0;
+            page_offset += body_height_mm;
+        }
+        out.push(page);
+        out.push(y - page_offset);
+    }
+    out
 }
 
 fn handle_punctuation(mut chunks: Vec<Chunk>, blobs: &[BlobRect]) -> Vec<Chunk> {

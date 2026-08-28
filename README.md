@@ -37,8 +37,8 @@ read from the same list.
 
 - **UI**: TypeScript + React
 - **Engine**: Rust → WebAssembly (`wasm-pack`) — segmentation, crop, reflow,
-  page-break/culling, Ksav export body. The Rust engine is required — it is the
-  engine, not an optional extra. The bundle is build output (gitignored apart
+  page-break/culling, Ksav export body, reading-order sort, PDF page layout.
+  The Rust engine is required — it is the engine, not an optional extra. The bundle is build output (gitignored apart
   from its `.d.ts` type files), so a clean clone must run `npm run wasm:build`
   once before `dev`/`build`/`test`.
 - **Rendering**: Canvas (chunk images) + DOM (typed text) hybrid
@@ -50,9 +50,11 @@ read from the same list.
 engine — segmentation (binarization, connected components, word grouping,
 column-aware reading order with user-drawn sections and dividers), chunk
 cropping, the reflow/layout engine, page-break computation
-(`reflow_page_breaks`), viewport culling (`reflow_visible_indices`), and the
-Ksav/Typst export body (`ksav_body_typst`) — is implemented in Rust and compiled
-to WebAssembly (`crates/scrivio-wasm`, bundled in `src/wasm-pkg`). Rust is the
+(`reflow_page_breaks`), viewport culling (`reflow_visible_indices`), the
+Ksav/Typst export body (`ksav_body_typst`), the reading-order sort used when
+building import entries (`order_chunks`), and the PDF page-splitting math
+(`pdf_page_layout`) — is implemented in Rust and compiled to WebAssembly
+(`crates/scrivio-wasm`, bundled in `src/wasm-pkg`). Rust is the
 engine that runs; there is no user-facing fallback. `npm run dev`/`build`/`test`
 guard on the bundle and fail with a clear message if it is missing rather than
 silently degrading. Reflow, the per-keystroke hot path, crosses the wasm
@@ -86,7 +88,7 @@ clone still typechecks).
 | Script | Description |
 |--------|-------------|
 | `npm run wasm:build` | Build the Rust engine → `src/wasm-pkg` (required first) |
-| `npm run wasm:smoke` | Load the real wasm module in Node and drive it (segmentation/crop/reflow/culling/ksav) |
+| `npm run wasm:smoke` | Load the real wasm module in Node and drive it (segmentation/crop/reflow/culling/ksav/reading-order/pdf-layout) |
 | `npm run dev` | Vite dev server (guards on the wasm bundle) |
 | `npm run build` | Guard + typecheck + production build |
 | `npm test` | Smoke test (real Rust engine) + Vitest (36 tests; jsdom uses the TS twin unless it needs wasm — the Ksav export test runs the real module in Node) |

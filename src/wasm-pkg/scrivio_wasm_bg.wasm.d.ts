@@ -3,6 +3,8 @@
 export const memory: WebAssembly.Memory;
 export const crop_chunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const ksav_body_typst: (a: any, b: number) => [number, number, number, number];
+export const order_chunks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: number, k: any) => [number, number];
+export const pdf_page_layout: (a: number, b: number, c: number) => [number, number];
 export const reflow: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
 export const reflow_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
 export const reflow_page_breaks: (a: number, b: number, c: number) => [number, number];

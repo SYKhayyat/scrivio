@@ -166,6 +166,39 @@ try {
   check('ksav_body_typst runs', false, e?.message);
 }
 
+try {
+  // Reading order for insertion: 2-column page, column-major. Input order is
+  // l1, r1, l2, r2 (left col x=10, right col x=110, two lines each).
+  const xs = new Float64Array([10, 110, 10, 110]);
+  const ys = new Float64Array([0, 0, 40, 40]);
+  const ws = new Float64Array([80, 80, 80, 80]);
+  const hs = new Float64Array([20, 20, 20, 20]);
+  const ltr = engine.order_chunks(xs, ys, ws, hs, 'Ltr', 2, null);
+  check('order_chunks LTR reads column-major', ltr instanceof Uint32Array && Array.from(ltr).join(',') === '0,2,1,3', `ltr=${Array.from(ltr).join(',')}`);
+  const rtl = engine.order_chunks(xs, ys, ws, hs, 'Rtl', 2, null);
+  check('order_chunks RTL reads right column first', rtl instanceof Uint32Array && Array.from(rtl).join(',') === '1,3,0,2', `rtl=${Array.from(rtl).join(',')}`);
+  // Custom divider at x=150: right column is narrow (150..200).
+  const regions = [{ x: 0, y: 0, w: 200, h: 100, columns: 2, dividers: [150] }];
+  const reg = engine.order_chunks(new Float64Array([20, 170, 20, 170]), new Float64Array([0, 0, 40, 40]), new Float64Array([120, 20, 120, 20]), new Float64Array([20, 20, 20, 20]), 'Ltr', 1, regions);
+  check('order_chunks respects custom dividers', reg instanceof Uint32Array && Array.from(reg).join(',') === '0,2,1,3', `reg=${Array.from(reg).join(',')}`);
+} catch (e) {
+  check('order_chunks runs', false, e?.message);
+}
+
+try {
+  // PDF page layout: elements at y=0,10,55,56,110 with a 50 mm body height.
+  // Pages: 0 has 0,10; 1 has 55,56; 2 has 110 — each offset within its page.
+  const layout = engine.pdf_page_layout(new Float64Array([0, 10, 55, 56, 110]), 50);
+  const expected = new Float64Array([0, 0, 0, 10, 1, 5, 1, 6, 2, 10]);
+  check(
+    'pdf_page_layout assigns pages and offsets',
+    layout instanceof Float64Array && Array.from(layout).join(',') === Array.from(expected).join(','),
+    `layout=${Array.from(layout).join(',')}`,
+  );
+} catch (e) {
+  check('pdf_page_layout runs', false, e?.message);
+}
+
 console.log('');
 if (failures.length) {
   console.error(`wasm smoke failed (${failures.length}): ${failures.join(', ')}`);

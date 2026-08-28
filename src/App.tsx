@@ -61,7 +61,7 @@ export default function App() {
   );
 
   const handleInsert = useCallback(async () => {
-    const entries = src.buildImportEntries();
+    const entries = await src.buildImportEntries();
     if (entries.length === 0) return;
     setInserting(true);
     try {

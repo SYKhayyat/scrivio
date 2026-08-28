@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BoundingBox, ImportRegion, ScriptDirection } from '../core/types';
 import { SegmentationEngine } from '../engine/segmentation/segmentation-engine';
 import { orderChunksByRegions } from '../engine/segmentation/reading-order';
+import { loadWasmBackend } from '../engine/wasm/wasm-backend';
 import { DEFAULT_CONFIG } from '../core/config';
 
 export type SourceChunk = { id: string; bbox: BoundingBox; selected: boolean };
@@ -134,18 +135,43 @@ export function useSources() {
 
   const totalSelected = sources.reduce((s, e) => s + e.chunks.filter((c) => c.selected).length, 0);
 
-  /** All sources' selected chunks in reading order, ready for insertion. */
-  const buildImportEntries = useCallback((): ImportEntry[] => {
+  /**
+   * All sources' selected chunks in reading order, ready for insertion.
+   *
+   * Reading order is computed in Rust (`order_chunks`) — same sort the
+   * segmentation pipeline uses — because it runs on every insert. The TS
+   * `orderChunksByRegions` twin below is only used when the wasm module is
+   * unavailable (jsdom unit tests).
+   */
+  const buildImportEntries = useCallback(async (): Promise<ImportEntry[]> => {
+    const backend = await loadWasmBackend();
     return sources
       .filter((e) => !e.error && !e.segmenting)
       .map((e) => {
         const regions = e.regions.length > 0 ? e.regions : undefined;
-        const ordered = orderChunksByRegions(
-          e.chunks.map((c) => ({ ...c, x: c.bbox.x, y: c.bbox.y, w: c.bbox.w, h: c.bbox.h })),
-          e.direction,
-          regions,
-          e.columns,
-        );
+        const shapes = e.chunks.map((c) => ({ x: c.bbox.x, y: c.bbox.y, w: c.bbox.w, h: c.bbox.h }));
+        const ordered =
+          backend && shapes.length > 0
+            ? (() => {
+                const order = Array.from(
+                  backend.order_chunks(
+                    new Float64Array(shapes.map((s) => s.x)),
+                    new Float64Array(shapes.map((s) => s.y)),
+                    new Float64Array(shapes.map((s) => s.w)),
+                    new Float64Array(shapes.map((s) => s.h)),
+                    e.direction === 'rtl' ? 'Rtl' : 'Ltr',
+                    e.columns,
+                    regions ?? null,
+                  ),
+                );
+                return order.map((i) => e.chunks[i]);
+              })()
+            : orderChunksByRegions(
+                e.chunks.map((c) => ({ ...c, x: c.bbox.x, y: c.bbox.y, w: c.bbox.w, h: c.bbox.h })),
+                e.direction,
+                regions,
+                e.columns,
+              );
         return {
           file: e.file,
           direction: e.direction,

@@ -78,6 +78,18 @@ export type WasmBackend = {
   reflow_visible_indices(ys: Float64Array, heights: Float64Array, topMm: number, bottomMm: number): Uint32Array;
   /** Build the Ksav/Typst document body in Rust. */
   ksav_body_typst(elements: KsavExportElement[], rtl: boolean): string;
+  /** Reading-order indices for chunks about to be inserted. */
+  order_chunks(
+    xs: Float64Array,
+    ys: Float64Array,
+    ws: Float64Array,
+    hs: Float64Array,
+    direction: 'Ltr' | 'Rtl',
+    columns: number,
+    regions: WasmRegion[] | null,
+  ): Uint32Array;
+  /** Per-element [pageIndex, yWithinPage] (mm) for PDF export. */
+  pdf_page_layout(ys: Float64Array, bodyHeightMm: number): Float64Array;
 };
 
 let cached: Promise<WasmBackend | null> | null = null;
@@ -100,6 +112,8 @@ export function loadWasmBackend(): Promise<WasmBackend | null> {
           reflow_page_breaks?: WasmBackend['reflow_page_breaks'];
           reflow_visible_indices?: WasmBackend['reflow_visible_indices'];
           ksav_body_typst?: WasmBackend['ksav_body_typst'];
+          order_chunks?: WasmBackend['order_chunks'];
+          pdf_page_layout?: WasmBackend['pdf_page_layout'];
         };
         if (mod.default) await mod.default();
         if (
@@ -109,7 +123,9 @@ export function loadWasmBackend(): Promise<WasmBackend | null> {
           !mod.reflow_flat ||
           !mod.reflow_page_breaks ||
           !mod.reflow_visible_indices ||
-          !mod.ksav_body_typst
+          !mod.ksav_body_typst ||
+          !mod.order_chunks ||
+          !mod.pdf_page_layout
         )
           return null;
         return {
@@ -120,6 +136,8 @@ export function loadWasmBackend(): Promise<WasmBackend | null> {
           reflow_page_breaks: mod.reflow_page_breaks,
           reflow_visible_indices: mod.reflow_visible_indices,
           ksav_body_typst: mod.ksav_body_typst,
+          order_chunks: mod.order_chunks,
+          pdf_page_layout: mod.pdf_page_layout,
         };
       } catch {
         return null;

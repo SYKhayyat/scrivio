@@ -32,6 +32,26 @@ export function crop_chunk(image_bytes: Uint8Array, x: number, y: number, w: num
  */
 export function ksav_body_typst(elements_js: any, rtl: boolean): string;
 
+/**
+ * Reading-order sort for chunks about to be inserted (the app's "build
+ * import entries" step). Mirrors the TS `orderChunksByRegions` twin: regions
+ * read in the order given, then columns within a region (rightmost first for
+ * RTL), then lines top-to-bottom, then left/right within a line. Returns the
+ * input indices in reading order; the TS side maps them back onto its own
+ * chunk objects.
+ */
+export function order_chunks(xs: Float64Array, ys: Float64Array, ws: Float64Array, hs: Float64Array, direction_js: any, columns: number, regions_js: any): Uint32Array;
+
+/**
+ * Per-element page assignment for PDF export. Given the laid-out element
+ * y-positions (mm) and the usable body height, returns a flat array
+ * `[page0, y0, page1, y1, …]` where each page is the 0-based page the element
+ * lands on and each y is the element's offset within that page's body region.
+ * The page-splitting math that used to live in the TS exporter runs here; the
+ * TS side only converts mm→pt and issues the pdf-lib draw calls.
+ */
+export function pdf_page_layout(ys: Float64Array, body_height_mm: number): Float64Array;
+
 export function reflow(elements_js: any, page_width_mm: number, paragraph_spacing_mm: number, margin_left_mm: number, margin_right_mm: number): any;
 
 /**
@@ -71,6 +91,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly crop_chunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly ksav_body_typst: (a: any, b: number) => [number, number, number, number];
+    readonly order_chunks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: any, j: number, k: any) => [number, number];
+    readonly pdf_page_layout: (a: number, b: number, c: number) => [number, number];
     readonly reflow: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly reflow_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly reflow_page_breaks: (a: number, b: number, c: number) => [number, number];

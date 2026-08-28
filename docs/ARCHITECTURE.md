@@ -12,7 +12,7 @@ src/
   engine/
     reflow/       # ReflowEngine implements ReflowPort — Rust/WASM (flat arrays), TS fallback
     segmentation/ # SegmentationEngine implements SegmentationPort — Rust/WASM, TS fallback
-    wasm/         # WASM backend loader (segmentation, crop, reflow, culling, ksav)
+    wasm/         # WASM backend loader (segmentation, crop, reflow, culling, ksav, reading order, PDF layout)
   application/    # Use-cases + UndoRedoStack (Command pattern)
   storage/        # IndexedDBStorage + InMemoryStorage implement StoragePort
   components/     # React UI — MenuBar, Toolbar, StatusBar, ImportDialog, DocumentView
@@ -24,8 +24,9 @@ crates/scrivio-wasm/  # Rust engine (wasm-bindgen) — segmentation, crop, reflo
 
 **Rust is the engine. TypeScript is the UI.** Every computational stage —
 segmentation, chunk cropping, reflow/layout, page-break computation, viewport
-culling, and the Ksav/Typst export body — lives in `crates/scrivio-wasm` and runs
-as WebAssembly. It is a required dependency, not an optional extra: `npm run
+culling, the Ksav/Typst export body, reading-order sorting for insertion
+(`order_chunks`), and the PDF page-splitting math (`pdf_page_layout`) — lives in
+`crates/scrivio-wasm` and runs as WebAssembly. It is a required dependency, not an optional extra: `npm run
 dev`/`build`/`test` guard on the bundle and fail with a clear message if it is
 missing. The TS modules in `engine/` are thin adapters that call the wasm
 backend; faithful TS implementations exist only so the jsdom unit tests can run
@@ -47,7 +48,7 @@ exercises the real module in Node. Reflow uses a flat typed-array boundary
 Upload → SegmentationEngine → ChunkData[] → DocumentModel.insertAt(cursor)
 Edit (insert/delete/move) → UndoRedoStack.push → ReflowEngine.reflowFrom → Canvas+DOM
 Storage: DocumentModel.toSerialized() ↔ StoragePort
-Export: SerializedDocument → Rust ksav_body_typst (body) + pdf-lib / JSON (I/O)
+Export: SerializedDocument → Rust ksav_body_typst (body) + Rust pdf_page_layout (page assignment) + pdf-lib draw / JSON (I/O)
 ```
 
 ## Reflow
