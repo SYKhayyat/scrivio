@@ -16,7 +16,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 imageproc = "0.25"
 
 [dependencies.web-sys]
-version = "0.6"
+version = "0.3"
 features = []
 
 [profile.release]
