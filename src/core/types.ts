@@ -98,9 +98,28 @@ export type ScriptDirection = 'ltr' | 'rtl';
 
 export type SourceLayout = 'single-column' | 'multi-column' | 'table';
 
+/**
+ * A user-defined region (section) of the source image.
+ * Coordinates are in pixels of the original (full-resolution) image.
+ * `dividers` are the absolute x positions (in original-image pixels) of the
+ * vertical separators between columns, ordered left to right.
+ */
+export type ImportRegion = {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  columns: number;
+  dividers: number[];
+};
+
 export type SourceLayoutDeclaration = {
   layout: SourceLayout;
   columns?: number;
+  /** Optional user-drawn sections. When present, they define reading order
+   *  and per-section column/divider layout. Regions are in image pixels. */
+  regions?: ImportRegion[];
 };
 
 export type DocumentSettings = {

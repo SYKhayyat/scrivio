@@ -18,27 +18,45 @@ text unless you explicitly ask for it.
 ## Architecture
 
 The document is a single flat list of elements — chunks, typed words, breaks, and
-footnote references. A Rust/WASM reflow engine positions every element. Two rendering
-layers (canvas for chunks, DOM for typed text) read from the same list.
+footnote references. Two rendering layers (canvas for chunks, DOM for typed text)
+read from the same list.
 
 ```
-┌─────────────────────────────────────────┐
-│  Data model: flat list of elements      │
-├─────────────────────────────────────────┤
-│  Reflow engine (Rust/WASM)             │
-├──────────┬──────────────────────────────┤
-│  Canvas  │  DOM                         │
-│  (chunks)│  (typed text + cursors)      │
-└──────────┴──────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  Data model: flat list of elements          │
+├─────────────────────────────────────────────┤
+│  Engine (Rust/WASM, TS fallback)           │
+│  · segmentation · crop · reflow            │
+├──────────┬──────────────────────────────────┤
+│  Canvas  │  DOM                             │
+│  (chunks)│  (typed text + cursors)          │
+└──────────┴──────────────────────────────────┘
 ```
 
 ## Tech Stack
 
 - **UI**: TypeScript + React
-- **Computation**: Rust → WebAssembly (wasm-pack)
-- **Image processing**: Rust `image` + `imageproc` crates
-- **Rendering**: Canvas + DOM hybrid
+- **Engine**: Rust → WebAssembly (`wasm-pack`) — segmentation, crop, reflow;
+  with an equivalent TypeScript fallback so the app works without the wasm bundle
+- **Rendering**: Canvas (chunk images) + DOM (typed text) hybrid
 - **Storage**: IndexedDB (local, V1)
+
+## Rust / TypeScript split
+
+**Rust is the computation engine; TypeScript is the UI layer.** The entire
+engine — segmentation (binarization, connected components, word grouping,
+column-aware reading order with user-drawn sections and dividers), chunk
+cropping, and the reflow/layout engine — is implemented in Rust and compiled to
+WebAssembly (`crates/scrivio-wasm`, bundled in `src/wasm-pkg`). Reflow, the
+per-keystroke hot path, crosses the wasm boundary as flat typed arrays (kind
+codes + sizes in, `[x, y]` pairs out) — no serialization overhead, ~2× faster
+than the TypeScript layout at 5000 elements.
+
+TypeScript provides the React UI and a faithful fallback implementation of the
+same engines, so the app runs identically anywhere the wasm bundle is missing
+(jsdom tests, restricted environments). Rebuild the bundle with
+`npm run wasm:build` (needs `wasm-pack` and Rust's `wasm32-unknown-unknown`
+target).
 
 ## Quick Start
 

@@ -1,7 +1,8 @@
 node_modules
 dist
-src/wasm-pkg
 coverage
 *.local
 .DS_Store
 target/
+test-results/
+*.tsbuildinfo

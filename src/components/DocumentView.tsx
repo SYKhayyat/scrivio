@@ -10,13 +10,13 @@ type Props = {
   zoom: number;
   drawMode: boolean;
   onDrawRect: (rect: { x: number; y: number; w: number; h: number }) => void;
+  images: Map<string, HTMLImageElement>;
 };
 
-export function DocumentView({ doc, zoom, drawMode, onDrawRect }: Props) {
+export function DocumentView({ doc, zoom, drawMode, onDrawRect, images }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollY, setScrollY] = useState(0);
   const [viewportH, setViewportH] = useState(600);
-  const [images] = useState(() => new Map<string, HTMLImageElement>());
   const [drag, setDrag] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const hiddenInputRef = useRef<HTMLInputElement>(null);

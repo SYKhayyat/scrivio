@@ -1,6 +1,8 @@
 import type { SegmentationPort, SegmentOptions, ChunkData } from '../../core/ports';
 import type { BoundingBox } from '../../core/types';
 import type { SegmentationConfig } from '../../core/config';
+import { orderChunksByRegions } from './reading-order';
+import { loadWasmBackend } from '../wasm/wasm-backend';
 
 type BlobRect = BoundingBox & { area: number; pixels?: Uint8Array };
 
@@ -25,6 +27,27 @@ export class SegmentationEngine implements SegmentationPort {
   constructor(private config: SegmentationConfig) {}
 
   async segmentImage(image: ImageData | Blob, options: SegmentOptions): Promise<ChunkData[]> {
+    // Rust/WASM is the primary segmentation engine; regions included.
+    if (image instanceof Blob) {
+      const wasm = await loadWasmBackend();
+      if (wasm) {
+        try {
+          const bytes = new Uint8Array(await image.arrayBuffer());
+          const direction = options.direction === 'rtl' ? 'Rtl' : 'Ltr';
+          const columns = options.layout.columns && options.layout.columns > 1 ? options.layout.columns : null;
+          const regions = options.layout.regions && options.layout.regions.length > 0 ? options.layout.regions : null;
+          const chunks = wasm.segment_image(bytes, direction, columns, regions);
+          return chunks.map((c) => ({
+            id: c.id,
+            boundingBox: { x: c.boundingBox.x, y: c.boundingBox.y, w: c.boundingBox.w, h: c.boundingBox.h },
+            lineIndex: c.lineIndex,
+            positionOnLine: c.positionOnLine,
+          }));
+        } catch {
+          // Fall through to the TypeScript engine on any wasm failure.
+        }
+      }
+    }
     const imageData = await this.toImageData(image);
     const scaled = this.downscale(imageData, this.config.downscaleLongEdgePx);
     const binary = this.binarize(scaled);
@@ -33,10 +56,19 @@ export class SegmentationEngine implements SegmentationPort {
     if (blobs.length === 0) return [];
     const chunks = this.groupIntoWords(blobs);
     const lines = this.detectLines(chunks);
-    const ordered = this.orderChunks(lines, options.direction, options.layout.columns);
-    const withPunctuation = this.handlePunctuation(ordered, blobs);
     const scaleX = imageData.width / scaled.width;
     const scaleY = imageData.height / scaled.height;
+    // Regions are defined in original-image pixels; convert to scaled coords.
+    const regions = options.layout.regions?.map((r) => ({
+      x: r.x / scaleX,
+      y: r.y / scaleY,
+      w: r.w / scaleX,
+      h: r.h / scaleY,
+      columns: Math.max(1, Math.min(6, Math.round(r.columns || 1))),
+      dividers: (r.dividers ?? []).map((d) => d / scaleX),
+    }));
+    const ordered = orderChunksByRegions(lines, options.direction, regions, options.layout.columns);
+    const withPunctuation = this.handlePunctuation(ordered, blobs);
     return withPunctuation.map((c, idx) => ({
       id: crypto.randomUUID(),
       boundingBox: {
@@ -51,6 +83,16 @@ export class SegmentationEngine implements SegmentationPort {
   }
 
   async cropChunk(imageBlob: Blob, bbox: BoundingBox, quality = 85): Promise<Blob> {
+    const wasm = await loadWasmBackend();
+    if (wasm) {
+      try {
+        const bytes = new Uint8Array(await imageBlob.arrayBuffer());
+        const out = wasm.crop_chunk(bytes, Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.w), Math.round(bbox.h), quality);
+        return new Blob([out], { type: 'image/jpeg' });
+      } catch {
+        // Fall through to the TypeScript engine on any wasm failure.
+      }
+    }
     const bitmap = await createImageBitmap(imageBlob);
     const canvas = new OffscreenCanvas(bbox.w, bbox.h);
     const ctx = canvas.getContext('2d');
@@ -316,47 +358,7 @@ export class SegmentationEngine implements SegmentationPort {
     return lines;
   }
 
-  private orderChunks(
-    lines: Array<BlobRect & { lineIndex: number }>,
-    direction: string,
-    columns?: number,
-  ): Array<BlobRect & { lineIndex: number }> {
-    const byLine = new Map<number, Array<BlobRect & { lineIndex: number }>>();
-    for (const c of lines) {
-      if (!byLine.has(c.lineIndex)) byLine.set(c.lineIndex, []);
-      byLine.get(c.lineIndex)!.push(c);
-    }
 
-    const result: Array<BlobRect & { lineIndex: number }> = [];
-    const sortedLineIndices = [...byLine.keys()].sort((a, b) => a - b);
-
-    if (columns && columns > 1) {
-      const minX = Math.min(...lines.map((l) => l.x));
-      const maxX = Math.max(...lines.map((l) => l.x + l.w));
-      const colW = (maxX - minX) / columns;
-      for (const li of sortedLineIndices) {
-        const chunks = byLine.get(li)!;
-        const byCol = new Map<number, typeof chunks>();
-        for (const c of chunks) {
-          const col = Math.min(columns - 1, Math.floor((c.x - minX) / colW));
-          if (!byCol.has(col)) byCol.set(col, []);
-          byCol.get(col)!.push(c);
-        }
-        for (const col of [...byCol.keys()].sort((a, b) => a - b)) {
-          const colChunks = byCol.get(col)!;
-          colChunks.sort((a, b) => (direction === 'rtl' ? b.x - a.x : a.x - b.x));
-          result.push(...colChunks);
-        }
-      }
-    } else {
-      for (const li of sortedLineIndices) {
-        const chunks = byLine.get(li)!;
-        chunks.sort((a, b) => (direction === 'rtl' ? b.x + b.w - (a.x + a.w) : a.x - b.x));
-        result.push(...chunks);
-      }
-    }
-    return result;
-  }
 
   private handlePunctuation(
     chunks: Array<BlobRect & { lineIndex: number }>,

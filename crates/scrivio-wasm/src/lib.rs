@@ -11,20 +11,19 @@ pub struct ChunkData { pub id: String, pub boundingBox: BoundingBox, pub lineInd
 pub enum Direction { Ltr, Rtl }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct SegmentOptions { pub direction: Direction, pub columns: Option<u32> }
+pub struct ImportRegion { pub x: f64, pub y: f64, pub w: f64, pub h: f64, pub columns: u32, pub dividers: Vec<f64> }
 
 #[wasm_bindgen]
-pub fn reflow(elements_js: JsValue, page_width_mm: f64, paragraph_spacing_mm: f64, margin_left_mm: f64) -> Result<JsValue, JsValue> {
+pub fn reflow(elements_js: JsValue, page_width_mm: f64, paragraph_spacing_mm: f64, margin_left_mm: f64, margin_right_mm: f64) -> Result<JsValue, JsValue> {
     let elements: Vec<ReflowElement> = serde_wasm_bindgen::from_value(elements_js).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let positioned = reflow_internal(elements, page_width_mm, paragraph_spacing_mm, margin_left_mm);
+    let positioned = reflow_internal(elements, page_width_mm, paragraph_spacing_mm, margin_left_mm, margin_right_mm);
     serde_wasm_bindgen::to_value(&positioned).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct ReflowElement { id: String, kind: String, x: f64, y: f64, width: f64, height: f64 }
 
-fn reflow_internal(mut elements: Vec<ReflowElement>, page_width: f64, paragraph_spacing: f64, margin_left: f64) -> Vec<ReflowElement> {
-    let margin_right = 15.0;
+fn reflow_internal(mut elements: Vec<ReflowElement>, page_width: f64, paragraph_spacing: f64, margin_left: f64, margin_right: f64) -> Vec<ReflowElement> {
     let mut cursor_x = margin_left;
     let mut cursor_y = 0.0;
     let mut line_height: f64 = 0.0;
@@ -51,10 +50,67 @@ fn reflow_internal(mut elements: Vec<ReflowElement>, page_width: f64, paragraph_
     elements
 }
 
+/// Zero-copy reflow: the hot path used on every keystroke.
+///
+/// Elements are passed as parallel flat arrays (kind codes + sizes) and
+/// positions are returned as a flat `[x0, y0, x1, y1, …]` array in input
+/// order — no serde, no per-element allocation across the boundary.
+/// Kind codes: 0 = generic element, 1 = line-break, 2 = paragraph-break.
 #[wasm_bindgen]
-pub fn segment_image(image_bytes: &[u8], direction_js: JsValue, columns: Option<u32>) -> Result<JsValue, JsValue> {
+pub fn reflow_flat(
+    kinds: &[u8],
+    widths: &[f64],
+    heights: &[f64],
+    page_width_mm: f64,
+    paragraph_spacing_mm: f64,
+    margin_left_mm: f64,
+    margin_right_mm: f64,
+) -> Vec<f64> {
+    let n = kinds.len();
+    let mut out = Vec::with_capacity(n * 2);
+    let mut cursor_x = margin_left_mm;
+    let mut cursor_y = 0.0;
+    let mut line_height: f64 = 0.0;
+    for i in 0..n {
+        match kinds[i] {
+            2 => {
+                out.push(cursor_x); out.push(cursor_y);
+                cursor_x = margin_left_mm;
+                cursor_y += paragraph_spacing_mm + if line_height > 0.0 { line_height } else { 4.0 };
+                line_height = 0.0;
+            }
+            1 => {
+                out.push(cursor_x); out.push(cursor_y);
+                cursor_x = margin_left_mm;
+                cursor_y += if line_height > 0.0 { line_height } else { 4.0 };
+                line_height = 0.0;
+            }
+            _ => {
+                let w = if widths[i] > 0.0 { widths[i] } else { 5.0 };
+                let h = if heights[i] > 0.0 { heights[i] } else { 4.0 };
+                if cursor_x + w > page_width_mm - margin_right_mm + 0.01 && cursor_x > margin_left_mm {
+                    cursor_x = margin_left_mm;
+                    cursor_y += line_height;
+                    line_height = 0.0;
+                }
+                out.push(cursor_x); out.push(cursor_y);
+                cursor_x += w;
+                line_height = line_height.max(h);
+            }
+        }
+    }
+    out
+}
+
+#[wasm_bindgen]
+pub fn segment_image(image_bytes: &[u8], direction_js: JsValue, columns: Option<u32>, regions_js: JsValue) -> Result<JsValue, JsValue> {
     let direction: Direction = serde_wasm_bindgen::from_value(direction_js).unwrap_or(Direction::Ltr);
-    let chunks = segment_image_internal(image_bytes, direction, columns).map_err(|e| JsValue::from_str(&e))?;
+    let regions: Vec<ImportRegion> = if regions_js.is_null() || regions_js.is_undefined() {
+        vec![]
+    } else {
+        serde_wasm_bindgen::from_value(regions_js).unwrap_or_default()
+    };
+    let chunks = segment_image_internal(image_bytes, direction, columns, regions).map_err(|e| JsValue::from_str(&e))?;
     serde_wasm_bindgen::to_value(&chunks).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -63,18 +119,28 @@ pub fn crop_chunk(image_bytes: &[u8], x: f64, y: f64, w: f64, h: f64, quality: u
     crop_internal(image_bytes, x as u32, y as u32, w as u32, h as u32, quality).map_err(|e| JsValue::from_str(&e))
 }
 
-fn segment_image_internal(bytes: &[u8], direction: Direction, columns: Option<u32>) -> Result<Vec<ChunkData>, String> {
+fn segment_image_internal(bytes: &[u8], direction: Direction, columns: Option<u32>, regions: Vec<ImportRegion>) -> Result<Vec<ChunkData>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
     let gray = img.to_luma8();
-    let (orig_w, orig_h) = (gray.width(), gray.height());
     let (scaled, scale_x, scale_y) = downscale(gray, 3000);
     let binary = binarize_adaptive(&scaled, 25, 7.0);
     let mut blobs = connected_components(&binary, scaled.width(), scaled.height());
     blobs.retain(|b| b.area >= 5 && (b.area as f32) < (scaled.width() * scaled.height()) as f32 * 0.5);
     if blobs.is_empty() { return Ok(vec![]); }
     let chunks = group_into_words(&blobs);
-    let lines = detect_lines(&chunks);
-    let ordered = order_chunks(lines, direction, columns);
+    // Regions arrive in original-image pixels; convert to scaled coordinates.
+    let scaled_regions: Vec<ScaledRegion> = regions
+        .iter()
+        .map(|r| ScaledRegion {
+            x: r.x / scale_x,
+            y: r.y / scale_y,
+            w: r.w / scale_x,
+            h: r.h / scale_y,
+            columns: r.columns.max(1).min(6),
+            dividers: r.dividers.iter().map(|d| d / scale_x).collect(),
+        })
+        .collect();
+    let ordered = order_chunks_with_regions(chunks, direction, &scaled_regions, columns);
     let merged = handle_punctuation(ordered, &blobs);
     let mut out = Vec::new();
     for (idx, c) in merged.into_iter().enumerate() {
@@ -90,7 +156,6 @@ fn segment_image_internal(bytes: &[u8], direction: Direction, columns: Option<u3
             positionOnLine: idx as u32,
         });
     }
-    let _ = (orig_w, orig_h);
     Ok(out)
 }
 
@@ -213,7 +278,7 @@ fn group_into_words(blobs: &[BlobRect]) -> Vec<Chunk> {
     let threshold = median_w * 1.5;
     let n = blobs.len();
     let mut parent: Vec<usize> = (0..n).collect();
-    let find = |parent: &mut Vec<usize>, mut x: usize| -> usize { while parent[x] != x { x = parent[x]; } x };
+    fn find(parent: &mut [usize], mut x: usize) -> usize { while parent[x] != x { x = parent[x]; } x }
     let mut sorted: Vec<(usize, &BlobRect)> = blobs.iter().enumerate().collect();
     sorted.sort_by(|a, b| a.1.y.cmp(&b.1.y).then(a.1.x.cmp(&b.1.x)));
     for i in 0..sorted.len() {
@@ -223,12 +288,9 @@ fn group_into_words(blobs: &[BlobRect]) -> Vec<Chunk> {
             let gap = b.x as i32 - (a.x + a.w) as i32;
             if gap >= 0 && (gap as f64) < threshold && (a.y as i32 - b.y as i32).abs() < (a.h.max(b.h) as f64 * 0.5) as i32 {
                 let ai = sorted[i].0; let bj = sorted[j].0;
-                let ra = find(&mut parent.clone(), ai); let rb = find(&mut parent.clone(), bj);
-                let _ = (ra, rb);
-                let mut p = parent.clone();
-                let ra2 = { let mut x = ai; while p[x] != x { x = p[x]; } x };
-                let rb2 = { let mut x = bj; while p[x] != x { x = p[x]; } x };
-                if ra2 != rb2 { parent[rb2] = ra2; }
+                let ra = find(&mut parent, ai);
+                let rb = find(&mut parent, bj);
+                if ra != rb { parent[rb] = ra; }
             }
         }
     }
@@ -248,56 +310,84 @@ fn group_into_words(blobs: &[BlobRect]) -> Vec<Chunk> {
     chunks
 }
 
-fn detect_lines(mut chunks: Vec<Chunk>) -> Vec<Chunk> {
-    if chunks.is_empty() { return chunks; }
-    let mut hs: Vec<u32> = chunks.iter().map(|c| c.h).collect(); hs.sort_unstable();
-    let median_h = hs[hs.len() / 2] as f64;
-    chunks.sort_by(|a, b| (a.y as f64 + a.h as f64 / 2.0).partial_cmp(&(b.y as f64 + b.h as f64 / 2.0)).unwrap());
-    let mut current_line: u32 = 0;
-    let mut current_center = chunks[0].y as f64 + chunks[0].h as f64 / 2.0;
-    let mut out = Vec::new();
-    for mut c in chunks {
-        let center = c.y as f64 + c.h as f64 / 2.0;
-        if (center - current_center).abs() > median_h * 0.5 {
-            current_line += 1; current_center = center;
-        }
-        c.line_index = current_line; out.push(c);
-    }
-    out
-}
+/// A user-drawn section of the image, in scaled (working) coordinates.
+#[derive(Clone)]
+struct ScaledRegion { x: f64, y: f64, w: f64, h: f64, columns: u32, dividers: Vec<f64> }
 
-fn order_chunks(mut chunks: Vec<Chunk>, direction: Direction, columns: Option<u32>) -> Vec<Chunk> {
-    use std::collections::HashMap;
-    let mut by_line: HashMap<u32, Vec<Chunk>> = HashMap::new();
-    for c in chunks.drain(..) { by_line.entry(c.line_index).or_default().push(c); }
-    let mut line_indices: Vec<u32> = by_line.keys().copied().collect(); line_indices.sort_unstable();
-    let mut result = Vec::new();
-    if let Some(cols) = columns { if cols > 1 {
-        let min_x = by_line.values().flat_map(|v| v.iter().map(|c| c.x)).min().unwrap_or(0);
-        let max_x = by_line.values().flat_map(|v| v.iter().map(|c| c.x + c.w)).max().unwrap_or(0);
-        let col_w = (max_x - min_x) as f64 / cols as f64;
-        for li in line_indices {
-            let mut line_chunks = by_line.remove(&li).unwrap();
-            let mut by_col: HashMap<u32, Vec<Chunk>> = HashMap::new();
-            for c in line_chunks.drain(..) {
-                let col = (((c.x - min_x) as f64 / col_w).floor() as u32).min(cols - 1);
-                by_col.entry(col).or_default().push(c);
-            }
-            let mut cols_sorted: Vec<u32> = by_col.keys().copied().collect(); cols_sorted.sort_unstable();
-            for col in cols_sorted {
-                let mut v = by_col.remove(&col).unwrap();
-                v.sort_by(|a, b| match direction { Direction::Rtl => b.x.cmp(&a.x), _ => a.x.cmp(&b.x) });
-                result.extend(v);
-            }
+/// Orders chunks in reading order.
+///
+/// Region-aware, column-major: regions read in the order given, then columns
+/// within a region (rightmost first for RTL, leftmost first for LTR), then
+/// lines top-to-bottom, then left/right within a line. Without regions the
+/// whole image is treated as a single region with `columns` equal splits —
+/// so a 2-column page reads column 1 fully, then column 2.
+fn order_chunks_with_regions(mut chunks: Vec<Chunk>, direction: Direction, regions: &[ScaledRegion], columns: Option<u32>) -> Vec<Chunk> {
+    if chunks.is_empty() { return chunks; }
+    let effective: Vec<ScaledRegion> = if regions.is_empty() {
+        let cols = match columns { Some(c) if c > 1 => c.min(6), _ => 1 };
+        let min_x = chunks.iter().map(|c| c.x).min().unwrap_or(0) as f64;
+        let min_y = chunks.iter().map(|c| c.y).min().unwrap_or(0) as f64;
+        let max_x = chunks.iter().map(|c| c.x + c.w).max().unwrap_or(0) as f64;
+        let max_y = chunks.iter().map(|c| c.y + c.h).max().unwrap_or(0) as f64;
+        let width = (max_x - min_x).max(1.0);
+        let dividers: Vec<f64> = (1..cols).map(|i| min_x + (i as f64 / cols as f64) * width).collect();
+        vec![ScaledRegion { x: min_x, y: min_y, w: width, h: (max_y - min_y).max(1.0), columns: cols, dividers }]
+    } else {
+        regions.to_vec()
+    };
+
+    // 0-based reading-order column index inside a region (RTL: rightmost = 0).
+    fn column_index(c: &Chunk, region: &ScaledRegion, direction: Direction) -> u32 {
+        let cols = region.columns.max(1);
+        if cols <= 1 { return 0; }
+        let cx = c.x as f64 + c.w as f64 / 2.0;
+        let mut dividers = region.dividers.clone();
+        if dividers.len() != (cols as usize - 1) {
+            dividers = (1..cols).map(|i| region.x + (i as f64 / cols as f64) * region.w).collect();
         }
-        return result;
-    }}
-    for li in line_indices {
-        let mut v = by_line.remove(&li).unwrap();
-        v.sort_by(|a, b| match direction { Direction::Rtl => b.x.cmp(&a.x), _ => a.x.cmp(&b.x) });
-        result.extend(v);
+        let mut col_from_left = 0u32;
+        for d in &dividers { if cx > *d { col_from_left += 1; } }
+        col_from_left = col_from_left.min(cols - 1);
+        match direction { Direction::Rtl => cols - 1 - col_from_left, _ => col_from_left }
     }
-    result
+
+    // Assign each chunk to the first region containing its center (outside = last).
+    let mut assigned: Vec<(usize, u32, Chunk)> = chunks
+        .into_iter()
+        .map(|c| {
+            let cx = c.x as f64 + c.w as f64 / 2.0;
+            let cy = c.y as f64 + c.h as f64 / 2.0;
+            let mut region_idx = effective.len();
+            let mut col = 0u32;
+            for (i, r) in effective.iter().enumerate() {
+                if cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h {
+                    region_idx = i;
+                    col = column_index(&c, r, direction);
+                    break;
+                }
+            }
+            (region_idx, col, c)
+        })
+        .collect();
+
+    let mut hs: Vec<u32> = assigned.iter().map(|a| a.2.h).collect();
+    hs.sort_unstable();
+    let median_h = hs[hs.len() / 2] as f64;
+    let line_tolerance = median_h * 0.5;
+
+    assigned.sort_by(|a, b| {
+        if a.0 != b.0 { return a.0.cmp(&b.0); }
+        if a.1 != b.1 { return a.1.cmp(&b.1); }
+        let ya = a.2.y as f64 + a.2.h as f64 / 2.0;
+        let yb = b.2.y as f64 + b.2.h as f64 / 2.0;
+        if (ya - yb).abs() > line_tolerance { return ya.partial_cmp(&yb).unwrap(); }
+        match direction {
+            Direction::Rtl => (b.2.x + b.2.w).cmp(&(a.2.x + a.2.w)),
+            _ => a.2.x.cmp(&b.2.x),
+        }
+    });
+
+    assigned.into_iter().map(|a| a.2).collect()
 }
 
 fn handle_punctuation(mut chunks: Vec<Chunk>, blobs: &[BlobRect]) -> Vec<Chunk> {
@@ -333,7 +423,7 @@ fn handle_punctuation(mut chunks: Vec<Chunk>, blobs: &[BlobRect]) -> Vec<Chunk> 
 
 fn crop_internal(bytes: &[u8], x: u32, y: u32, w: u32, h: u32, quality: u8) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
-    let mut rgb = img.to_rgb8();
+    let rgb = img.to_rgb8();
     let (iw, ih) = (rgb.width(), rgb.height());
     let x = x.min(iw.saturating_sub(1)); let y = y.min(ih.saturating_sub(1));
     let w = w.min(iw - x); let h = h.min(ih - y);

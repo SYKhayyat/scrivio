@@ -1,18 +1,68 @@
 import type { DocumentElement } from '../../core/types';
 import type { DocumentSettings } from '../../core/types';
 import type { ReflowPort } from '../../core/ports';
+import { loadWasmBackend, type WasmBackend } from '../wasm/wasm-backend';
 
 export class ReflowEngine implements ReflowPort {
+  private backend: WasmBackend | null = null;
+
+  constructor() {
+    // Load lazily; until the wasm bundle is ready the TypeScript layout runs
+    // (results are identical — layout is deterministic).
+    void loadWasmBackend().then((b) => {
+      this.backend = b;
+    });
+  }
+
   reflow(elements: DocumentElement[], settings: DocumentSettings): DocumentElement[] {
     return this.layout(elements, settings, 0, null);
   }
 
   reflowFrom(elements: DocumentElement[], settings: DocumentSettings, fromIndex: number): DocumentElement[] {
+    if (this.backend) {
+      try {
+        return this.wasmReflow(elements, settings);
+      } catch {
+        // Fall through to the TypeScript layout.
+      }
+    }
     if (fromIndex <= 0) return this.reflow(elements, settings);
     if (fromIndex >= elements.length) return elements.map((e) => ({ ...e }));
     const prefix = elements.slice(0, fromIndex);
     const prefixFlowed = this.layout(prefix, settings, 0, null);
     return this.layout(elements, settings, fromIndex, prefixFlowed);
+  }
+
+  /**
+   * Full reflow in Rust/WASM over a flat typed-array boundary (no serde),
+   * deterministic and identical to the TS layout. Positions come back in
+   * input order, so no ids are needed.
+   */
+  private wasmReflow(elements: DocumentElement[], settings: DocumentSettings): DocumentElement[] {
+    const n = elements.length;
+    const kinds = new Uint8Array(n);
+    const widths = new Float64Array(n);
+    const heights = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const el = elements[i];
+      kinds[i] = el.kind === 'line-break' ? 1 : el.kind === 'paragraph-break' ? 2 : 0;
+      widths[i] = el.width ?? 0;
+      heights[i] = el.height ?? 0;
+    }
+    const out = this.backend!.reflow_flat(
+      kinds,
+      widths,
+      heights,
+      settings.pageWidthMm,
+      settings.paragraphSpacingMm,
+      settings.marginLeftMm,
+      settings.marginRightMm,
+    );
+    return elements.map((el, i) => {
+      const x = out[i * 2];
+      const y = out[i * 2 + 1];
+      return { ...el, x, y, scratchX: x, scratchY: y };
+    });
   }
 
   private layout(

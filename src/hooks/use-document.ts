@@ -72,6 +72,8 @@ export function useDocument(initial?: DocumentModel) {
     const positioned = reflow(base, 0);
     setElements(positioned);
     model.setElements(positioned);
+    setCursor(model.getCursor());
+    setSelection(model.getSelection());
   }, [model, reflow]);
 
   const redo = useCallback(() => {
@@ -81,6 +83,8 @@ export function useDocument(initial?: DocumentModel) {
     const positioned = reflow(base, 0);
     setElements(positioned);
     model.setElements(positioned);
+    setCursor(model.getCursor());
+    setSelection(model.getSelection());
   }, [model, reflow]);
 
   const value = useMemo(

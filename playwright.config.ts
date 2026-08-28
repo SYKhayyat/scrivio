@@ -13,6 +13,7 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:5174',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    ...(process.env.CHROMIUM_PATH ? { launchOptions: { executablePath: process.env.CHROMIUM_PATH } } : {}),
   },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
 });

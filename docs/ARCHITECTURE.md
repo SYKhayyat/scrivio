@@ -10,17 +10,25 @@ SOLID, modular, extensible. Ports & Adapters (Hexagonal). Dependency Inversion: 
 src/
   core/           # Domain — types, DocumentModel, Config, Ports (interfaces)
   engine/
-    reflow/       # ReflowEngine implements ReflowPort
-    segmentation/ # SegmentationEngine implements SegmentationPort
+    reflow/       # ReflowEngine implements ReflowPort — Rust/WASM (flat arrays), TS fallback
+    segmentation/ # SegmentationEngine implements SegmentationPort — Rust/WASM, TS fallback
+    wasm/         # WASM backend loader (segmentation, crop, reflow) + typed fallbacks
   application/    # Use-cases + UndoRedoStack (Command pattern)
   storage/        # IndexedDBStorage + InMemoryStorage implement StoragePort
-  rendering/      # Canvas/DOM sync (future split)
-  components/     # React UI — Toolbar, DocumentView, CanvasLayer, DomLayer
+  components/     # React UI — MenuBar, Toolbar, StatusBar, ImportDialog, DocumentView
   hooks/          # useDocument handle
   utils/          # measure-text, export, ids
-  wasm-pkg/       # Rust/WASM pkg output (gitignored)
-crates/scrivio-wasm/  # Rust crate (wasm-bindgen) — same Reflow/Segmentation API in Rust
+  wasm-pkg/       # Built Rust/WASM bundle (gitignored; rebuild via `npm run wasm:build`)
+crates/scrivio-wasm/  # Rust engine (wasm-bindgen) — segmentation, crop, reflow; TS mirrors it
 ```
+
+**Rust is the engine. TypeScript is the UI.** Every computational stage —
+segmentation, chunk cropping, and reflow/layout — lives in
+`crates/scrivio-wasm` and runs as WebAssembly. The TS modules in `engine/` are
+thin adapters that call the wasm backend and fall back to a faithful TS
+implementation only when the bundle is absent (e.g. jsdom tests). Reflow uses a
+flat typed-array boundary (`reflow_flat`) so per-keystroke layout avoids serde
+overhead.
 
 ## SOLID mapping
 
