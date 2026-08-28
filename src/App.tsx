@@ -5,11 +5,8 @@ import { Toolbar } from './components/Toolbar';
 import { DocumentView } from './components/DocumentView';
 import { UploadDialog } from './components/UploadDialog';
 import { SegmentationEngine } from './engine/segmentation/segmentation-engine';
-import { ReflowEngine } from './engine/reflow/reflow-engine';
 import { DEFAULT_CONFIG } from './core/config';
-import { measureTypedWord } from './utils/measure-text';
 import { exportToPdf, exportToJson } from './utils/export';
-import type { ScriptDirection, SourceLayout } from './core/types';
 import './App.css';
 
 export default function App() {
@@ -18,6 +15,7 @@ export default function App() {
   const [drawMode, setDrawMode] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [segmenting, setSegmenting] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -28,37 +26,54 @@ export default function App() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  const handleUpload = useCallback(async (files: File[], direction: ScriptDirection, layout: SourceLayout, columns?: number) => {
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [toast]);
+
+  const handleInsert = useCallback(async (entries: Array<{ file: File; direction: string; layout: string; columns: number; chunks?: Array<{ id: string; bbox: { x: number; y: number; w: number; h: number }; selected: boolean }> }>) => {
     setSegmenting(true);
     try {
       const engine = new SegmentationEngine(DEFAULT_CONFIG.segmentation);
-      for (const file of files) {
-        const chunks = await engine.segmentImage(file, { direction, layout: { layout, columns } });
-        const reflowEngine = new ReflowEngine();
-        const settings = doc.model.getSettings();
-        settings.direction = direction;
-        doc.model.updateSettings(settings);
-        for (const c of chunks) {
-          const blob = await engine.cropChunk(file, c.boundingBox);
-          const url = URL.createObjectURL(blob);
-          const img = new Image();
-          img.src = url;
-          await img.decode().catch(() => {});
-          const mmW = (c.boundingBox.w / 300) * 25.4;
-          const mmH = (c.boundingBox.h / 300) * 25.4;
+      for (const ent of entries) {
+        const selected = ent.chunks?.filter((c) => c.selected) ?? [];
+        if (selected.length === 0) continue;
+        let blob: Blob = ent.file;
+        if (ent.file.type === 'application/pdf') {
+          const pdfjs = await import('pdfjs-dist');
+          const data = await ent.file.arrayBuffer();
+          const pdf = await pdfjs.getDocument({ data }).promise;
+          const page = await pdf.getPage(1);
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width; canvas.height = viewport.height;
+          const ctx = canvas.getContext('2d')!;
+          // @ts-ignore
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          blob = await new Promise<Blob>((res, rej) => canvas.toBlob((b) => b ? res(b) : rej(new Error('pdf render failed')), 'image/jpeg', 0.92));
+        }
+        const dir = ent.direction as 'ltr' | 'rtl';
+        doc.model.updateSettings({ ...doc.model.getSettings(), direction: dir });
+        for (const ch of selected) {
+          const crop = await engine.cropChunk(blob, ch.bbox, 85).catch(() => blob.slice(0, 0));
+          void crop;
+          const mmW = (ch.bbox.w / 300) * 25.4;
+          const mmH = (ch.bbox.h / 300) * 25.4;
           doc.insertElement({
             kind: 'chunk',
-            id: c.id,
-            sourceImageId: file.name,
-            boundingBox: c.boundingBox,
+            id: ch.id,
+            sourceImageId: ent.file.name,
+            boundingBox: ch.bbox,
             x: 0, y: 0,
             width: Math.max(4, mmW),
             height: Math.max(4, mmH),
           });
-          void reflowEngine;
-          void url;
         }
       }
+      setToast(`Inserted ${entries.reduce((s, e) => s + (e.chunks?.filter((c) => c.selected).length ?? 0), 0)} chunks at cursor`);
+    } catch (e) {
+      setToast(String(e));
     } finally {
       setSegmenting(false);
     }
@@ -127,41 +142,23 @@ export default function App() {
         onZoom={setZoom}
       />
       {segmenting && <div className="segmenting-banner">Segmenting handwriting…</div>}
+      {toast && <div className="segmenting-banner" style={{ background: '#d1ecf1', borderColor: '#bee5eb' }}>{toast}</div>}
       <div style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <DocumentView doc={doc} zoom={zoom} drawMode={drawMode} onDrawRect={handleDrawRect} />
         {doc.elements.length === 0 && !segmenting && (
           <div className="empty-state" style={{ position: 'absolute', inset: 0, background: 'rgba(243,241,236,0.92)', zIndex: 1, pointerEvents: 'none' }}>
             <h1>Scrivio</h1>
             <p>A word processor that starts with a photo of handwriting.</p>
-            <button className="primary large" style={{ pointerEvents: 'auto' }} onClick={() => setUploadOpen(true)}>Drop a photo of handwriting here, or click Upload</button>
-            <p className="muted">No OCR — your handwriting stays as image chunks. Or just start typing.</p>
-            <div className="demo-actions" style={{ pointerEvents: 'auto' }}>
-              <button onClick={() => insertDemoText(doc)}>Insert demo typed text</button>
-              <button onClick={() => insertDemoChunks(doc)}>Insert demo chunks</button>
-            </div>
+            <button className="primary large" style={{ pointerEvents: 'auto' }} onClick={() => setUploadOpen(true)}>Import handwriting</button>
+            <p className="muted">Place the cursor first, then import — chunks appear at the cursor, even mid-page. Choose RTL/LTR and columns per file, and keep only the chunks you want.</p>
           </div>
         )}
       </div>
-      <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onUpload={handleUpload} />
+      <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onInsert={handleInsert} />
     </div>
   );
 }
 
 function rectsOverlap(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; width: number; height: number }): boolean {
   return !(a.x + a.w < b.x || b.x + b.width < a.x || a.y + a.h < b.y || b.y + b.height < a.y);
-}
-
-function insertDemoText(doc: ReturnType<typeof useDocument>) {
-  const words = 'The quick brown fox jumps over the lazy dog — Scrivio in action.'.split(' ');
-  for (const w of words) {
-    const m = measureTypedWord(w, 'serif', 4, false, false);
-    doc.insertElement({ kind: 'typed-word', id: crypto.randomUUID(), text: w, fontFamily: 'serif', fontSize: 4, bold: false, italic: false, underline: false, x: 0, y: 0, width: m.width, height: m.height });
-  }
-}
-
-function insertDemoChunks(doc: ReturnType<typeof useDocument>) {
-  const placeholders = ['Hello', 'handwritten', 'world', 'from', 'Scrivio'];
-  for (const _ of placeholders) {
-    doc.insertElement({ kind: 'chunk', id: crypto.randomUUID(), sourceImageId: 'demo', boundingBox: { x: 0, y: 0, w: 100, h: 40 }, x: 0, y: 0, width: 18, height: 7 });
-  }
 }

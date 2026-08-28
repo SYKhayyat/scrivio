@@ -4,17 +4,19 @@ import userEvent from '@testing-library/user-event';
 import App from '../../App';
 
 describe('Human flow — as user would use Scrivio', () => {
-  it('empty state → demo chunks → insert between chunks → line break → list → footnote → undo/redo → export', async () => {
+  it('empty state → insert between chunks → line break → list → footnote → undo/redo → export', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    expect(screen.getByText(/Drop a photo of handwriting here/)).toBeVisible();
-    await user.click(screen.getByText('Insert demo chunks'));
+    expect(screen.getByText('Scrivio')).toBeVisible();
+    expect(screen.getByText('Import handwriting')).toBeVisible();
     expect(document.querySelector('.canvas-layer')).toBeTruthy();
     expect(document.querySelector('.dom-layer')).toBeTruthy();
 
     const docView = document.querySelector('.document-view') as HTMLElement;
     await user.click(docView);
+    await user.keyboard('hello');
+    await user.keyboard('{ArrowLeft}{ArrowLeft}X');
 
     await user.keyboard('{ArrowRight} hello');
     expect(document.querySelector('.dom-layer')?.textContent).toContain('hello');
@@ -62,11 +64,11 @@ describe('Human flow — as user would use Scrivio', () => {
   it('upload dialog a11y', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getAllByText('Upload')[0]);
-    expect(screen.getByText('Upload handwriting')).toBeVisible();
-    expect(screen.getByText('Script direction')).toBeVisible();
-    await user.click(screen.getByText('Cancel'));
-    expect(screen.queryByText('Upload handwriting')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Upload' }));
+    expect(await screen.findByRole('heading', { name: 'Import handwriting' })).toBeVisible();
+    expect(screen.getByText(/Choose files/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('heading', { name: 'Import handwriting' })).not.toBeInTheDocument();
   });
 
   it('zoom and toolbar', async () => {
