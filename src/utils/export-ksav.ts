@@ -1,4 +1,5 @@
-import type { SerializedDocument } from '../core/types';
+import type { SerializedDocument, DocumentElement } from '../core/types';
+import { loadWasmBackend, type KsavExportElement } from '../engine/wasm/wasm-backend';
 
 /**
  * Serialize a Scrivio document as a Ksav document file (`.ksav`) — the format
@@ -13,10 +14,32 @@ import type { SerializedDocument } from '../core/types';
  * resolves asset names through its own file resolver. Direction and language
  * are carried in the `config` object (`dir`, `lang`), which Ksav's `DocConfig`
  * reads for page setup and the compile.
+ *
+ * The Typst **body** (header + element flow + text escaping) is built by the
+ * Rust engine (`ksav_body_typst`); this module only assembles the thin JSON
+ * wrapper and base64-encodes the chunk images, which are pure I/O.
  */
-export function exportToKsavTypst(doc: SerializedDocument, chunkBytes: Map<string, Uint8Array>): string {
+export async function exportToKsavTypst(doc: SerializedDocument, chunkBytes: Map<string, Uint8Array>): Promise<string> {
+  const wasm = await loadWasmBackend();
+  if (!wasm) throw new Error('Rust/WASM engine not available to build the Ksav export');
+  return exportToKsavTypstWith(wasm.ksav_body_typst.bind(wasm), doc, chunkBytes);
+}
+
+/**
+ * The wrapper assembly, separated from the wasm load so tests can feed the real
+ * Rust serializer directly (and so the browser keeps the same code path).
+ *
+ * `serializeBody` produces the Typst body string from a compact element list
+ * + the writing direction; in production it is Rust's `ksav_body_typst`.
+ */
+export function exportToKsavTypstWith(
+  serializeBody: (elements: KsavExportElement[], rtl: boolean) => string,
+  doc: SerializedDocument,
+  chunkBytes: Map<string, Uint8Array>,
+): string {
   const rtl = doc.settings.direction === 'rtl';
-  const body = buildBody(doc, chunkBytes);
+  const elements = doc.elements.map((el) => toKsavElement(el, chunkBytes));
+  const body = serializeBody(elements, rtl);
 
   // Assets the body references, plus a config that carries the writing
   // direction — the two things that make a bare-text file insufficient.
@@ -43,45 +66,26 @@ export function exportToKsavTypst(doc: SerializedDocument, chunkBytes: Map<strin
   );
 }
 
-/** The Typst source: a direction/language header, then the document flow. */
-function buildBody(doc: SerializedDocument, chunkBytes: Map<string, Uint8Array>): string {
-  const rtl = doc.settings.direction === 'rtl';
-  const out: string[] = [];
-  out.push(`#set text(lang: ${rtl ? '"he"' : '"en"'}, dir: ${rtl ? 'rtl' : 'ltr'}, size: 11pt)\n`);
-
-  for (const el of doc.elements) {
-    switch (el.kind) {
-      case 'typed-word':
-        out.push(escapeTypstText(el.text) + ' ');
-        break;
-      case 'line-break':
-        out.push('\\\n');
-        break;
-      case 'paragraph-break':
-        out.push('\n\n');
-        break;
-      case 'bullet':
-        out.push('• ');
-        break;
-      case 'footnote-ref':
-        out.push('[' + el.number + ']');
-        break;
-      case 'chunk': {
-        const bytes = chunkBytes.get(el.id);
-        if (bytes) {
-          const name = `chunk-${el.id}.jpg`;
-          out.push(`#image("${name}", width: ${fmt(el.width)}mm) `);
-        }
-        break;
-      }
-    }
+/** Reduce a document element to the compact shape the Rust serializer needs. */
+export function toKsavElement(el: DocumentElement, chunkBytes: Map<string, Uint8Array>): KsavExportElement {
+  switch (el.kind) {
+    case 'typed-word':
+      return { kind: 'typed-word', text: el.text };
+    case 'line-break':
+      return { kind: 'line-break' };
+    case 'paragraph-break':
+      return { kind: 'paragraph-break' };
+    case 'bullet':
+      return { kind: 'bullet' };
+    case 'footnote-ref':
+      return { kind: 'footnote-ref', number: el.number };
+    case 'chunk':
+      return { kind: 'chunk', id: el.id, width: el.width, hasBytes: chunkBytes.has(el.id) };
   }
-
-  return out.join('');
 }
 
 /** The `assets` array Ksav expects: `{name, kind, data}` with base64 bytes. */
-function collectAssets(doc: SerializedDocument, chunkBytes: Map<string, Uint8Array>): Array<{ name: string; kind: string; data: string }> {
+export function collectAssets(doc: SerializedDocument, chunkBytes: Map<string, Uint8Array>): Array<{ name: string; kind: string; data: string }> {
   const assets: Array<{ name: string; kind: string; data: string }> = [];
   for (const el of doc.elements) {
     if (el.kind !== 'chunk') continue;
@@ -90,16 +94,6 @@ function collectAssets(doc: SerializedDocument, chunkBytes: Map<string, Uint8Arr
     assets.push({ name: `chunk-${el.id}.jpg`, kind: 'image', data: bytesToBase64(bytes) });
   }
   return assets;
-}
-
-function fmt(n: number): string {
-  const v = Math.round(n * 10) / 10;
-  return Number.isInteger(v) ? String(v) : String(v);
-}
-
-/** Escape Typst markup special characters for inline text. */
-function escapeTypstText(text: string): string {
-  return text.replace(/([#$\\*_`-])/g, '\\$1');
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

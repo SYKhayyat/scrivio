@@ -118,6 +118,54 @@ try {
   check('reflow_flat runs', false, e?.message);
 }
 
+try {
+  // Page-break positions: laid-out elements at y=0, 55, 56, 110 with a 50 mm
+  // body height → pages start at element y once y crosses each 50 mm boundary
+  // (after a break at 55 the next page ends at 100, so 56 does NOT start one).
+  const ys = new Float64Array([0, 10, 55, 56, 110]);
+  const breaks = engine.reflow_page_breaks(ys, 50);
+  const expected = new Float64Array([55, 110]);
+  check(
+    'reflow_page_breaks returns page starts',
+    breaks instanceof Float64Array && Array.from(breaks).join(',') === Array.from(expected).join(','),
+    `breaks=${Array.from(breaks).join(',')}`,
+  );
+} catch (e) {
+  check('reflow_page_breaks runs', false, e?.message);
+}
+
+try {
+  // Visible indices: band [5, 15] mm. Elements 1 and 2 overlap it; 0 and 3 don't.
+  const ys = new Float64Array([0, 10, 18, 30]);
+  const hs = new Float64Array([4, 4, 6, 4]);
+  const vis = engine.reflow_visible_indices(ys, hs, 5, 15);
+  check('reflow_visible_indices returns culled indices', vis instanceof Uint32Array && Array.from(vis).join(',') === '1', `vis=${Array.from(vis).join(',')}`);
+} catch (e) {
+  check('reflow_visible_indices runs', false, e?.message);
+}
+
+try {
+  // Ksav/Typst body: header + escaping + image line, built in Rust.
+  const body = engine.ksav_body_typst(
+    [
+      { kind: 'typed-word', text: '50% off #1' },
+      { kind: 'chunk', id: 'c1', width: 25.4, hasBytes: true },
+      { kind: 'paragraph-break' },
+    ],
+    true,
+  );
+  check(
+    'ksav_body_typst builds body',
+    typeof body === 'string' &&
+      body.includes('#set text(lang: "he", dir: rtl') &&
+      body.includes('50% off \\#1') &&
+      body.includes('#image("chunk-c1.jpg", width: 25.4mm)'),
+    `body=${body}`,
+  );
+} catch (e) {
+  check('ksav_body_typst runs', false, e?.message);
+}
+
 console.log('');
 if (failures.length) {
   console.error(`wasm smoke failed (${failures.length}): ${failures.join(', ')}`);

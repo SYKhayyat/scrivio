@@ -36,10 +36,11 @@ read from the same list.
 ## Tech Stack
 
 - **UI**: TypeScript + React
-- **Engine**: Rust → WebAssembly (`wasm-pack`) — segmentation, crop, reflow.
-  The Rust engine is required — it is the engine, not an optional extra. The
-  bundle is build output (gitignored apart from its `.d.ts` type files), so a
-  clean clone must run `npm run wasm:build` once before `dev`/`build`.
+- **Engine**: Rust → WebAssembly (`wasm-pack`) — segmentation, crop, reflow,
+  page-break/culling, Ksav export body. The Rust engine is required — it is the
+  engine, not an optional extra. The bundle is build output (gitignored apart
+  from its `.d.ts` type files), so a clean clone must run `npm run wasm:build`
+  once before `dev`/`build`/`test`.
 - **Rendering**: Canvas (chunk images) + DOM (typed text) hybrid
 - **Storage**: IndexedDB (local, V1)
 
@@ -48,10 +49,12 @@ read from the same list.
 **Rust is the computation engine; TypeScript is the UI layer.** The entire
 engine — segmentation (binarization, connected components, word grouping,
 column-aware reading order with user-drawn sections and dividers), chunk
-cropping, and the reflow/layout engine — is implemented in Rust and compiled to
-WebAssembly (`crates/scrivio-wasm`, bundled in `src/wasm-pkg`). Rust is the
-engine that runs; there is no user-facing fallback. `npm run dev`/`build` guard
-on the bundle and fail with a clear message if it is missing rather than
+cropping, the reflow/layout engine, page-break computation
+(`reflow_page_breaks`), viewport culling (`reflow_visible_indices`), and the
+Ksav/Typst export body (`ksav_body_typst`) — is implemented in Rust and compiled
+to WebAssembly (`crates/scrivio-wasm`, bundled in `src/wasm-pkg`). Rust is the
+engine that runs; there is no user-facing fallback. `npm run dev`/`build`/`test`
+guard on the bundle and fail with a clear message if it is missing rather than
 silently degrading. Reflow, the per-keystroke hot path, crosses the wasm
 boundary as flat typed arrays (kind codes + sizes in, `[x, y]` pairs out) — no
 serialization overhead, ~2× faster than the TypeScript layout at 5000 elements.
@@ -83,10 +86,10 @@ clone still typechecks).
 | Script | Description |
 |--------|-------------|
 | `npm run wasm:build` | Build the Rust engine → `src/wasm-pkg` (required first) |
-| `npm run wasm:smoke` | Load the real wasm module in Node and drive it (segmentation/crop/reflow) |
+| `npm run wasm:smoke` | Load the real wasm module in Node and drive it (segmentation/crop/reflow/culling/ksav) |
 | `npm run dev` | Vite dev server (guards on the wasm bundle) |
 | `npm run build` | Guard + typecheck + production build |
-| `npm test` | Vitest (jsdom, uses the TS engine — jsdom has no wasm runtime) |
+| `npm test` | Smoke test (real Rust engine) + Vitest (36 tests; jsdom uses the TS twin unless it needs wasm — the Ksav export test runs the real module in Node) |
 | `npx tsc --noEmit` | Typecheck (works without the bundle — `.d.ts` are committed) |
 
 ## Project Status

@@ -102,6 +102,121 @@ pub fn reflow_flat(
     out
 }
 
+/// Page-break positions, in mm. Given the laid-out element y-coordinates and
+/// the usable body height, returns the y at which each new page begins.
+/// Takes the same input as the TS `computePageBreaks` engine method so the
+/// browser runs the Rust path (the TS twin exists only for jsdom tests).
+#[wasm_bindgen]
+pub fn reflow_page_breaks(ys: &[f64], body_height_mm: f64) -> Vec<f64> {
+    let mut breaks = Vec::new();
+    let mut page_end = body_height_mm;
+    for &y in ys {
+        if y >= page_end {
+            breaks.push(y);
+            page_end += body_height_mm;
+        }
+    }
+    breaks
+}
+
+/// Small viewport-culling helper: which elements intersect the band
+/// `[top_mm, bottom_mm]`. Mirrors the TS `getVisibleIndices` so rendering in
+/// the browser runs the same Rust path as everything else.
+///
+/// Returns the indices (as u32) of elements whose box `y..y+h` overlaps the
+/// band. Callers convert the pixel viewport to mm first (dpi/zoom), matching
+/// the TS twin.
+#[wasm_bindgen]
+pub fn reflow_visible_indices(ys: &[f64], heights: &[f64], top_mm: f64, bottom_mm: f64) -> Vec<u32> {
+    let n = ys.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        if ys[i] + heights[i] >= top_mm && ys[i] <= bottom_mm {
+            out.push(i as u32);
+        }
+    }
+    out
+}
+
+/// One serializable element for the Ksav/Typst export.
+///
+/// Only carries the fields the serializer needs; `has_bytes` tells us whether
+/// a chunk's cropped image is available so we know whether to emit its
+/// `#image(...)` line (mirroring the TS twin, which skipped chunks without
+/// bytes).
+#[derive(Serialize, Deserialize, Clone)]
+struct KsavElement {
+    #[serde(rename = "kind")]
+    kind: String,
+    #[serde(rename = "text", skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(rename = "number", skip_serializing_if = "Option::is_none")]
+    number: Option<u32>,
+    #[serde(rename = "id", skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(rename = "width", skip_serializing_if = "Option::is_none")]
+    width: Option<f64>,
+    #[serde(rename = "hasBytes", default)]
+    has_bytes: bool,
+}
+
+/// Build the Ksav/Typst document body (the direction/language header plus the
+/// element flow), in Rust. Mirrors the TS `buildBody`, so the browser does the
+/// serialization in the engine rather than in TypeScript string-building.
+#[wasm_bindgen]
+pub fn ksav_body_typst(elements_js: JsValue, rtl: bool) -> Result<String, JsValue> {
+    let elements: Vec<KsavElement> = serde_wasm_bindgen::from_value(elements_js).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "#set text(lang: {}, dir: {}, size: 11pt)\\n",
+        if rtl { "\"he\"" } else { "\"en\"" },
+        if rtl { "rtl" } else { "ltr" }
+    ));
+    for el in elements {
+        match el.kind.as_str() {
+            "typed-word" => {
+                out.push_str(&escape_typst(el.text.as_deref().unwrap_or("")));
+                out.push(' ');
+            }
+            "line-break" => out.push_str("\\\\\n"),
+            "paragraph-break" => out.push_str("\n\n"),
+            "bullet" => out.push_str("• "),
+            "footnote-ref" => {
+                out.push('[');
+                out.push_str(&el.number.unwrap_or(0).to_string());
+                out.push_str("]");
+            }
+            "chunk" => {
+                if el.has_bytes {
+                    let id = el.id.as_deref().unwrap_or("");
+                    out.push_str(&format!("#image(\"chunk-{id}.jpg\", width: {}mm) ", fmt_mm(el.width.unwrap_or(0.0))));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Format an mm width to 1 decimal, matching the TS twin (`fmt`).
+fn fmt_mm(n: f64) -> String {
+    let v = (n * 10.0).round() / 10.0;
+    format!("{:.1}", v)
+}
+
+/// Escape Typst markup special characters for inline text, matching the TS
+/// twin (`escapeTypstText`): `#$\\*_`-` get a backslash prefix.
+fn escape_typst(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '#' | '$' | '\\' | '*' | '_' | '`' | '-') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[wasm_bindgen]
 pub fn segment_image(image_bytes: &[u8], direction_js: JsValue, columns: Option<u32>, regions_js: JsValue) -> Result<JsValue, JsValue> {
     let direction: Direction = serde_wasm_bindgen::from_value(direction_js).unwrap_or(Direction::Ltr);

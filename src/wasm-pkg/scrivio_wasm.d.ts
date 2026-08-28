@@ -25,6 +25,13 @@ export enum ChromaSampling {
 
 export function crop_chunk(image_bytes: Uint8Array, x: number, y: number, w: number, h: number, quality: number): Uint8Array;
 
+/**
+ * Build the Ksav/Typst document body (the direction/language header plus the
+ * element flow), in Rust. Mirrors the TS `buildBody`, so the browser does the
+ * serialization in the engine rather than in TypeScript string-building.
+ */
+export function ksav_body_typst(elements_js: any, rtl: boolean): string;
+
 export function reflow(elements_js: any, page_width_mm: number, paragraph_spacing_mm: number, margin_left_mm: number, margin_right_mm: number): any;
 
 /**
@@ -37,6 +44,25 @@ export function reflow(elements_js: any, page_width_mm: number, paragraph_spacin
  */
 export function reflow_flat(kinds: Uint8Array, widths: Float64Array, heights: Float64Array, page_width_mm: number, paragraph_spacing_mm: number, margin_left_mm: number, margin_right_mm: number): Float64Array;
 
+/**
+ * Page-break positions, in mm. Given the laid-out element y-coordinates and
+ * the usable body height, returns the y at which each new page begins.
+ * Takes the same input as the TS `computePageBreaks` engine method so the
+ * browser runs the Rust path (the TS twin exists only for jsdom tests).
+ */
+export function reflow_page_breaks(ys: Float64Array, body_height_mm: number): Float64Array;
+
+/**
+ * Small viewport-culling helper: which elements intersect the band
+ * `[top_mm, bottom_mm]`. Mirrors the TS `getVisibleIndices` so rendering in
+ * the browser runs the same Rust path as everything else.
+ *
+ * Returns the indices (as u32) of elements whose box `y..y+h` overlaps the
+ * band. Callers convert the pixel viewport to mm first (dpi/zoom), matching
+ * the TS twin.
+ */
+export function reflow_visible_indices(ys: Float64Array, heights: Float64Array, top_mm: number, bottom_mm: number): Uint32Array;
+
 export function segment_image(image_bytes: Uint8Array, direction_js: any, columns: number | null | undefined, regions_js: any): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -44,8 +70,11 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly crop_chunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly ksav_body_typst: (a: any, b: number) => [number, number, number, number];
     readonly reflow: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly reflow_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
+    readonly reflow_page_breaks: (a: number, b: number, c: number) => [number, number];
+    readonly reflow_visible_indices: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly segment_image: (a: number, b: number, c: any, d: number, e: any) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

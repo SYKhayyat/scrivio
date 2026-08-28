@@ -12,26 +12,26 @@ src/
   engine/
     reflow/       # ReflowEngine implements ReflowPort — Rust/WASM (flat arrays), TS fallback
     segmentation/ # SegmentationEngine implements SegmentationPort — Rust/WASM, TS fallback
-    wasm/         # WASM backend loader (segmentation, crop, reflow) + typed fallbacks
+    wasm/         # WASM backend loader (segmentation, crop, reflow, culling, ksav)
   application/    # Use-cases + UndoRedoStack (Command pattern)
   storage/        # IndexedDBStorage + InMemoryStorage implement StoragePort
   components/     # React UI — MenuBar, Toolbar, StatusBar, ImportDialog, DocumentView
   hooks/          # useDocument handle
-  utils/          # measure-text, export, ids
+  utils/          # measure-text, export glue, ids
   wasm-pkg/       # Built Rust/WASM bundle (gitignored except the .d.ts type files; rebuild via `npm run wasm:build`)
-crates/scrivio-wasm/  # Rust engine (wasm-bindgen) — segmentation, crop, reflow
+crates/scrivio-wasm/  # Rust engine (wasm-bindgen) — segmentation, crop, reflow, culling, ksav
 ```
 
 **Rust is the engine. TypeScript is the UI.** Every computational stage —
-segmentation, chunk cropping, and reflow/layout — lives in
-`crates/scrivio-wasm` and runs as WebAssembly. It is a required dependency, not
-an optional extra: `npm run dev`/`build` guard on the bundle and fail with a
-clear message if it is missing. The TS modules in `engine/` are thin adapters
-that call the wasm backend; a faithful TS implementation exists only so the
-jsdom unit tests can run deterministically (jsdom has no wasm runtime), and
-`scripts/wasm-smoke.mjs` exercises the real module in Node. Reflow uses a flat
-typed-array boundary (`reflow_flat`) so per-keystroke layout avoids serde
-overhead.
+segmentation, chunk cropping, reflow/layout, page-break computation, viewport
+culling, and the Ksav/Typst export body — lives in `crates/scrivio-wasm` and runs
+as WebAssembly. It is a required dependency, not an optional extra: `npm run
+dev`/`build`/`test` guard on the bundle and fail with a clear message if it is
+missing. The TS modules in `engine/` are thin adapters that call the wasm
+backend; faithful TS implementations exist only so the jsdom unit tests can run
+deterministically (jsdom has no wasm runtime), and `scripts/wasm-smoke.mjs`
+exercises the real module in Node. Reflow uses a flat typed-array boundary
+(`reflow_flat`) so per-keystroke layout avoids serde overhead.
 
 ## SOLID mapping
 
@@ -47,12 +47,12 @@ overhead.
 Upload → SegmentationEngine → ChunkData[] → DocumentModel.insertAt(cursor)
 Edit (insert/delete/move) → UndoRedoStack.push → ReflowEngine.reflowFrom → Canvas+DOM
 Storage: DocumentModel.toSerialized() ↔ StoragePort
-Export: SerializedDocument → pdf-lib / JSON
+Export: SerializedDocument → Rust ksav_body_typst (body) + pdf-lib / JSON (I/O)
 ```
 
 ## Reflow
 
-O(n) single pass. Dirty-region: `reflowFrom(index)` only recomputes from edit point (Stylus Labs Write pattern via `scratchX/scratchY`). See `src/engine/reflow/reflow-engine.ts`.
+O(n) single pass. Dirty-region: `reflowFrom(index)` only recomputes from edit point (Stylus Labs Write pattern via `scratchX/scratchY`). Page-break positions (`reflow_page_breaks`) and viewport culling (`reflow_visible_indices`, used by `CanvasLayer`) also run in Rust. See `src/engine/reflow/reflow-engine.ts`.
 
 ## Segmentation (8 steps)
 

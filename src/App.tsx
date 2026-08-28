@@ -180,10 +180,16 @@ export default function App() {
     download(new Blob([exportToJson(doc.model.toSerialized())], { type: 'application/json' }), `${doc.model.name}.json`);
   }, [doc]);
 
-  const handleExportKsav = useCallback(() => {
-    const typ = exportToKsavTypst(doc.model.toSerialized(), chunkBytesRef.current);
-    download(new Blob([typ], { type: 'text/plain;charset=utf-8' }), `${doc.model.name}.typ`);
-    setToast('Exported Ksav/Typst document.');
+  const handleExportKsav = useCallback(async () => {
+    try {
+      const typ = await exportToKsavTypst(doc.model.toSerialized(), chunkBytesRef.current);
+      download(new Blob([typ], { type: 'text/plain;charset=utf-8' }), `${doc.model.name}.typ`);
+      setToast('Exported Ksav/Typst document.');
+    } catch (e) {
+      // The Rust engine is required; a failure here means it couldn't build the
+      // body (e.g. run outside the browser). Surface it rather than crash.
+      setToast(`Ksav export failed: ${String(e)}`);
+    }
   }, [doc]);
 
   const zoomIn = () => setZoom((z) => Math.min(3, +(z + 0.1).toFixed(2)));

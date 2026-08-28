@@ -165,7 +165,7 @@ export function DocumentView({ doc, zoom, drawMode, onDrawRect, images }: Props)
     >
       <div className="ruler-h" style={{ width: docWidthPx }} />
       <div className="page" style={{ width: docWidthPx, height: docHeightPx, position: 'relative', background: 'white', boxShadow: '0 1px 8px rgba(0,0,0,0.15)' }}>
-        <CanvasLayer elements={doc.elements} zoom={zoom} images={images} selection={selection} viewportHeight={viewportH} scrollY={scrollY} />
+        <CanvasLayer elements={doc.elements} zoom={zoom} images={images} selection={selection} viewportHeight={viewportH} scrollY={scrollY} reflowEngine={doc.reflowEngine} />
         <DomLayer elements={doc.elements} zoom={zoom} cursorIndex={doc.cursor.index} onCursorMove={(i) => doc.setCursor(i)} onSelect={(a, f) => doc.setSelection(a, f)} />
         {drag && <div className="draw-rect" style={{ left: drag.x, top: drag.y, width: drag.w, height: drag.h }} />}
         {renderPageBreaks(doc.elements, settings.bodyHeightMm, zoom, dpi)}

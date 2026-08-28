@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { DocumentElement } from '../core/types';
+import type { ReflowEngine } from '../engine/reflow/reflow-engine';
 import { mmToPx } from '../core/config';
 
 type Props = {
@@ -9,9 +10,10 @@ type Props = {
   selection: [number, number] | null;
   viewportHeight: number;
   scrollY: number;
+  reflowEngine: ReflowEngine;
 };
 
-export function CanvasLayer({ elements, zoom, images, selection, viewportHeight, scrollY }: Props) {
+export function CanvasLayer({ elements, zoom, images, selection, viewportHeight, scrollY, reflowEngine }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -46,14 +48,27 @@ export function CanvasLayer({ elements, zoom, images, selection, viewportHeight,
       }
     }
 
-    for (const el of elements) {
+    // Cull to the elements inside the visible viewport — this runs through the
+    // Rust engine (reflow_visible_indices), not an inline TS loop.
+    const bufferPx = 100;
+    const visible = reflowEngine.getVisibleIndices(
+      elements,
+      { y: scrollY, height: viewportHeight },
+      bufferPx,
+      dpi,
+      zoom,
+    );
+    const visibleSet = new Set(visible);
+
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
       if (el.kind !== 'chunk') continue;
+      if (!visibleSet.has(i)) continue;
       const img = images.get(el.id);
       const x = mmToPx(el.x, dpi, zoom);
       const y = mmToPx(el.y, dpi, zoom);
       const ww = mmToPx(el.width, dpi, zoom);
       const hh = mmToPx(el.height, dpi, zoom);
-      if (y + hh < scrollY - 100 || y > scrollY + viewportHeight + 100) continue;
       if (img && img.complete) {
         ctx.drawImage(img, x, y, ww, hh);
       } else {
@@ -65,7 +80,7 @@ export function CanvasLayer({ elements, zoom, images, selection, viewportHeight,
     }
 
     ctx.restore();
-  }, [elements, zoom, images, selection, viewportHeight, scrollY]);
+  }, [elements, zoom, images, selection, viewportHeight, scrollY, reflowEngine]);
 
   return <canvas ref={ref} className="canvas-layer" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />;
 }

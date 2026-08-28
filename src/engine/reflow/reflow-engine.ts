@@ -153,7 +153,16 @@ export class ReflowEngine implements ReflowPort {
     return h;
   }
 
+  /**
+   * Page-break y positions. Rust/WASM is the engine; the TS loop below runs
+   * only when the wasm module is unavailable (jsdom unit tests).
+   */
   computePageBreaks(elements: DocumentElement[], bodyHeightMm: number): number[] {
+    if (this.backend) {
+      const ys = new Float64Array(elements.map((e) => e.y));
+      const out = this.backend.reflow_page_breaks(ys, bodyHeightMm);
+      return Array.from(out);
+    }
     const breaks: number[] = [];
     let pageEnd = bodyHeightMm;
     for (const el of elements) {
@@ -165,6 +174,10 @@ export class ReflowEngine implements ReflowPort {
     return breaks;
   }
 
+  /**
+   * Indices of elements intersecting the viewport band (with a pixel buffer
+   * around it). Rust/WASM is the engine; the TS loop runs only under jsdom.
+   */
   getVisibleIndices(
     elements: DocumentElement[],
     viewport: { y: number; height: number },
@@ -176,6 +189,11 @@ export class ReflowEngine implements ReflowPort {
     const bufferMm = bufferPx * pxToMm;
     const top = viewport.y - bufferMm;
     const bottom = viewport.y + viewport.height + bufferMm;
+    if (this.backend) {
+      const ys = new Float64Array(elements.map((e) => e.y));
+      const hs = new Float64Array(elements.map((e) => e.height ?? 0));
+      return Array.from(this.backend.reflow_visible_indices(ys, hs, top, bottom));
+    }
     const indices: number[] = [];
     for (let i = 0; i < elements.length; i++) {
       const y = elements[i].y;

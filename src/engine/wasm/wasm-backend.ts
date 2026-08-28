@@ -35,6 +35,18 @@ export type WasmElement = {
   height: number;
 };
 
+/** A minimal element for the Ksav/Typst body serializer (Rust).
+ * `hasBytes` only matters for `chunk`; the Rust side defaults it to false so it
+ * can be omitted for every other kind (mirrors `#[serde(default)]`). */
+export type KsavExportElement = {
+  kind: 'typed-word' | 'line-break' | 'paragraph-break' | 'bullet' | 'footnote-ref' | 'chunk';
+  text?: string;
+  number?: number;
+  id?: string;
+  width?: number;
+  hasBytes?: boolean;
+};
+
 export type WasmBackend = {
   segment_image(
     bytes: Uint8Array,
@@ -60,6 +72,12 @@ export type WasmBackend = {
     marginLeftMm: number,
     marginRightMm: number,
   ): Float64Array;
+  /** Page-break positions given laid-out element y-coordinates (mm). */
+  reflow_page_breaks(ys: Float64Array, bodyHeightMm: number): Float64Array;
+  /** Visible-element indices intersecting the mm band [topMm, bottomMm]. */
+  reflow_visible_indices(ys: Float64Array, heights: Float64Array, topMm: number, bottomMm: number): Uint32Array;
+  /** Build the Ksav/Typst document body in Rust. */
+  ksav_body_typst(elements: KsavExportElement[], rtl: boolean): string;
 };
 
 let cached: Promise<WasmBackend | null> | null = null;
@@ -79,14 +97,29 @@ export function loadWasmBackend(): Promise<WasmBackend | null> {
           crop_chunk?: WasmBackend['crop_chunk'];
           reflow?: WasmBackend['reflow'];
           reflow_flat?: WasmBackend['reflow_flat'];
+          reflow_page_breaks?: WasmBackend['reflow_page_breaks'];
+          reflow_visible_indices?: WasmBackend['reflow_visible_indices'];
+          ksav_body_typst?: WasmBackend['ksav_body_typst'];
         };
         if (mod.default) await mod.default();
-        if (!mod.segment_image || !mod.crop_chunk || !mod.reflow || !mod.reflow_flat) return null;
+        if (
+          !mod.segment_image ||
+          !mod.crop_chunk ||
+          !mod.reflow ||
+          !mod.reflow_flat ||
+          !mod.reflow_page_breaks ||
+          !mod.reflow_visible_indices ||
+          !mod.ksav_body_typst
+        )
+          return null;
         return {
           segment_image: mod.segment_image,
           crop_chunk: mod.crop_chunk,
           reflow: mod.reflow,
           reflow_flat: mod.reflow_flat,
+          reflow_page_breaks: mod.reflow_page_breaks,
+          reflow_visible_indices: mod.reflow_visible_indices,
+          ksav_body_typst: mod.ksav_body_typst,
         };
       } catch {
         return null;
