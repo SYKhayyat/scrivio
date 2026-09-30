@@ -1,0 +1,10 @@
+number,title,url,D,R,why,risk
+1,Import dialog: confirm button not appearing or working,https://github.com/SYKhayyat/scrivio/issues/1,2,3,Sticky footer + auto-segment; dead button blocks import visibly,Visible import block
+2,Import workflow: see file to RTL/LTR to per-section columns + divider,https://github.com/SYKhayyat/scrivio/issues/2,5,3,Guided visual workflow + fix crop/order; empty crops break visibly,Visible import break
+3,UI overhaul: professional LibreOffice-grade interface,https://github.com/SYKhayyat/scrivio/issues/3,5,1,Menu/toolbar/statusbar rework; chrome cosmetic only,Cosmetic only
+4,Architecture: Rust/WASM crate is dead code — runtime is 100% TypeScript,https://github.com/SYKhayyat/scrivio/issues/4,4,2,Wire WASM behind ports or delete; claim-vs-reality only,Claim drift only
+5,Two-pane workspace: original + editing document; Ksav migration,https://github.com/SYKhayyat/scrivio/issues/5,5,2,Source pane + Ksav export migration; new architecture no data risk yet,Architecture risk only
+6,[Medium/bug] insertAtCursor double-advances cursor,https://github.com/SYKhayyat/scrivio/issues/6,1,3,Remove extra +=1; cursor lands visibly wrong,Visible cursor error
+7,[High/bug] IndexedDB tx resolves before commit silent loss,https://github.com/SYKhayyat/scrivio/issues/7,2,5,Wait oncomplete; abort-after-resolve loses chunks irreversibly,Irreversible chunk loss
+8,[Medium/bug] PDF footnote rule drawn at wrong Y,https://github.com/SYKhayyat/scrivio/issues/8,1,2,Use footnoteHeight; misplaced rule only,Cosmetic rule
+9,[Medium/bug] Ksav export duplicates assets on repeated chunk,https://github.com/SYKhayyat/scrivio/issues/9,1,2,Seen-set on id; bloated export only,Bloat only
