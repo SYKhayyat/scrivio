@@ -1908,36 +1908,47 @@ the expensive places are front-loaded: M2 (segmentation quality) and M8 (Hebrew
 PDF) are the two places where a subtle, silent, demo-looking-correct failure is
 possible. Everything else fails loudly and is cheap to fix.
 
-### 13.1 Two phases, not twelve milestones of tests-first
+### 13.1 Two sessions: all the tests, then all the code
 
-The work is split so that **M0–M2 get their tests written in a dedicated pass
-before any of their implementation exists**, and everything after that runs
-test-first inside its own milestone.
+The work is split in two, at the largest possible seam.
 
-Why only M0–M2: those three are pure. `domain/` and `engine/` import no DOM, no
-React, no browser API, and no ProseMirror, so a test for them is a function call
-with an expected value and nothing else — which is the one kind of test an agent
-writes correctly when left alone. They are also where being wrong is most
-expensive (M2 is the segmentation gate) and where self-grading is most fatal
-(§6.13). They are worth a whole session of undivided attention.
-
-Why not M3–M11: those tests are mostly about integration with things that only
-exist once something is running — ProseMirror's DOM round trip, worker message
-transfer, `content-visibility` in a real browser, blob URL lifetime, native RTL
-caret behaviour. A test written for them in advance encodes guesses about APIs
-that have not been touched, and the result is a pile of red tests whose failures
-are about the guesses rather than the code. Test-first is the discipline that
-matters; writing them three weeks before the implementation is not a higher
-form of it.
-
-| Phase | Session | Contains |
+| Session | Contains | Ends with |
 |---|---|---|
-| **A** | one | M0 scaffold, then every test for M1 and M2 (§6.0–6.14). No implementation beyond the scaffold. |
-| **B** | the rest | Implement M1–M2 until those tests are green. Then M3 onward, test-first within each milestone. |
+| **A** | the scaffold, then **every test in this document** — one file per "Done when" list in §6 through §12 | `npm test` failing |
+| **B** | the implementation, milestone by milestone | all six acceptance items passing |
 
-Phase A ends with `npm test` reporting failures — that is the correct outcome
-and it is not a problem to fix in that session. Phase B starts by making them
-pass.
+**Session A ends with `npm test` failing, and that is its success condition.**
+No test in it can pass: the modules do not exist, so the files cannot even be
+collected. Do not "fix" this by writing implementation, and do not weaken a test
+to make something collect — a phase-A test that has been softened to compile is
+indistinguishable from a test that was always weak. The exit criterion is
+completeness, not passing:
+
+- every "Done when" list in §6–§12 has a corresponding test file;
+- each file names the module it tests, and imports nothing that §4–§5 have not
+  specified;
+- `npm test` fails at collection or assertion, and the failure output names
+  missing modules rather than a bug in a test.
+
+**Session B starts by restoring the loop.** Implement M0, then M1, then M2, in
+that order, against the tests already written — which puts a working
+red-green-refactor cycle back in place within the first hour, and the rest of
+the milestone order in §13.2 then follows a suite that is already written rather
+than being written alongside.
+
+The one real cost, stated rather than hidden: if a phase-A test encodes a wrong
+assumption about a requirement, session B discovers it while trying to satisfy
+it. That is why §14.1's rules and §14.4's stop conditions exist, and why the
+document had to be pinned this hard before session A starts — the test author
+works only from what is written here, so anything left undecided becomes
+somebody's guess instead of a decision.
+
+**What phase A cannot buy, however carefully it is done.** `content-visibility`
+performance, native RTL caret and IME behaviour, blob URL lifetime, real
+selection across 3,000 chunks, and whether an exported PDF looks right in
+Acrobat are properties of a running browser. No vitest test written in advance
+touches them, which is why §11.7 and M2's exit criterion are manual checks and
+not a checklist item that can be completed by writing more tests.
 
 ### M0 — Scaffold
 **Goal:** the offline rebuild works before any product code exists.
