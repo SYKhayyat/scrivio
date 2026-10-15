@@ -1,36 +1,68 @@
 {
   "_comment": [
-    "Real handwriting regression fixtures. Each .gray file is raw 8-bit",
-    "single-channel luma, row-major, width*height bytes, no header.",
-    "Generated from photographs in the archived scrivio_old repo:",
-    "  magick <src> -auto-orient -resize '1600x1600>' -colorspace Gray -depth 8 out.gray",
-    "expectedWords is filled in by the M2 milestone (run the pipeline once, record",
-    "the count, keep the tolerance). tolerance is the allowed absolute deviation."
+    "Ground truth for the segmentation regression fixtures. Read the provenance",
+    "on every field before trusting it: the numbers here were counted BY HAND from",
+    "the photographs, on purpose. Recording them by running the pipeline instead",
+    "would make the test grade the implementation with itself, which is the one",
+    "thing a regression test must never do.",
+    "",
+    "Regenerating a .gray file:",
+    "  magick <source> -auto-orient -resize '1600x1600>' -colorspace Gray -depth 8 out.gray",
+    "Each file is raw 8-bit single-channel luma, row-major, width*height bytes, no",
+    "header. Sources live in the archived scrivio_old repository."
   ],
+
+  "toleranceSemantics": {
+    "expectedLines": "absolute; the test asserts count within +/- tolerance",
+    "expectedWords": "absolute; present only where the count was read with certainty",
+    "mustNotDetect": "no returned box may overlap any of these rectangles at all"
+  },
+
   "fixtures": [
     {
       "file": "handwriting1.gray",
-      "width": 1600,
-      "height": 900,
-      "source": "handwriting1.jpg (3264x1836 phone photo, landscape note)",
+      "width": 900,
+      "height": 1600,
+      "source": "handwriting1.jpg — 3264x1836 phone photo of a lined notebook page, rotated in EXIF, dense Hebrew notes",
+      "kind": "photograph",
+      "expectedLines": 33,
+      "linesTolerance": 3,
+      "linesProvenance": "Counted by eye from the photograph. A row-projection count over the text column independently gives 33. Treated as 33 +/- 3: the page is dense enough that a tighter claim would be false precision.",
       "expectedWords": null,
-      "tolerance": null
+      "wordsProvenance": "DELIBERATELY ABSENT. Dense cursive-adjacent Hebrew with dashes and attached punctuation; hand-counting words at this resolution produces a number that is wrong for reasons unrelated to segmentation. Asserting it would fail the pipeline for the annotator's mistakes, not the pipeline's.",
+      "mustNotDetect": []
     },
     {
       "file": "handwriting2.gray",
       "width": 1056,
       "height": 816,
-      "source": "handwriting2.jpg (1056x816 scan)",
-      "expectedWords": null,
-      "tolerance": null
+      "source": "handwriting2.jpg — NOT a photograph. A clean digital rendering of Hebrew text inside a rectangular frame (a title card).",
+      "kind": "clean synthetic control",
+      "expectedLines": 6,
+      "linesTolerance": 0,
+      "expectedWords": 32,
+      "wordsTolerance": 0,
+      "wordsProvenance": "Exact. Crisp glyphs, read directly: title 'הפילה שהניאל כל כנור' = 4, attribution '[מתוך תמונות דף שו.]' = 4, then four body lines of 7, 7, 6, 4. Total 32.",
+      "mustNotDetect": [],
+      "why": "This is the fixture that can assert an exact word count, and it earns its place twice: it pins word grouping and reading order to an exact number, and it is the control that proves the two photographs' looser tolerances are not hiding a pipeline that has stopped working."
     },
     {
       "file": "handwriting3.gray",
       "width": 1215,
       "height": 1600,
-      "source": "handwriting3.png (1591x2096 phone photo, portrait page)",
+      "source": "handwriting3.png — 1591x2096 phone photo of a lined notebook page, dense Hebrew notes, three punched holes down the left margin and a column of names written in the right margin",
+      "kind": "photograph",
+      "expectedLines": 40,
+      "linesTolerance": 4,
+      "linesProvenance": "Counted by eye from the photograph, including the faint header lines and the right-margin name column. A row-projection count over the text column gives 42. Treated as 40 +/- 4.",
       "expectedWords": null,
-      "tolerance": null
+      "wordsProvenance": "DELIBERATELY ABSENT — same reason as handwriting1.",
+      "mustNotDetect": [
+        { "x0": 40, "y0": 123, "x1": 98, "y1": 183, "what": "punch hole 1" },
+        { "x0": 33, "y0": 772, "x1": 93, "y1": 832, "what": "punch hole 2" },
+        { "x0": 30, "y0": 1419, "x1": 88, "y1": 1479, "what": "punch hole 3" }
+      ],
+      "mustNotDetectProvenance": "Located objectively by connected-component labelling of the dark mask in the left margin: three components of ~1800 px each, 47x49, 49x49 and 47x49. The rectangles are those bboxes grown by 6 px. These are not holes the pipeline should 'reasonably' reject on size — at 1800 px they are 0.1% of the frame, well under maxBlobAreaFrac. Rejecting them requires the line-height filter to work, which is precisely why they are in the fixture."
     }
   ]
 }

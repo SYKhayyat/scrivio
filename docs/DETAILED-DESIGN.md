@@ -23,7 +23,7 @@ Three rules govern everything below.
    "Done when" list does not exist yet.
 
 Where this document contradicts `DESIGN.md`, `DESIGN.md` wins and this document
-is wrong — except for the deviations recorded in §15.1, which were agreed
+is wrong — except for the deviations recorded in §16.1, which were agreed
 explicitly.
 
 ### 0.1 Build order at a glance
@@ -885,27 +885,56 @@ downscaling can put the last row half a pixel outside.
 
 ### 6.13 Fixture regression — `tests/segmentation.real.test.ts`
 
-Three real photographs, already converted to raw 8-bit luma
-(`tests/fixtures/*.gray`, `manifest.json` describes each). The test:
+Three images in `tests/fixtures/`, converted to raw 8-bit luma (`.gray` +
+`manifest.json`). Two are photographs of handwritten notebook pages; one is a
+clean digital rendering of Hebrew text. The photograph is angled, unevenly lit,
+and dense — this is the quality bar the SRS sets, and it is deliberately
+unflattering.
+
+**The ground truth was counted by hand, from the photographs.** That is the
+whole design of this section, and it is worth being explicit about why. An
+earlier draft of this document said `expectedWords` should be filled in "by
+running the pipeline and recording the result". That is self-grading: the test
+then certifies whatever the implementation happened to do, an agent under
+pressure makes a failing fixture pass by recording a worse number, and the
+fixture guards nothing while reporting that it does. The numbers below were
+read off the photographs, with a stated tolerance where the reading is not
+exact, and `manifest.json` records that provenance per field.
+
+| Fixture | Asserts | Tolerance |
+|---|---|---|
+| `handwriting1.gray` — dense photographed page | 33 text lines | ±3 |
+| `handwriting2.gray` — clean digital rendering | 6 lines, **32 words** | 0 |
+| `handwriting3.gray` — photographed page with 3 punch holes | 40 text lines | ±4 |
+
+Two deliberate asymmetries:
+
+- **No word count on the two photographs.** Dense cursive-adjacent Hebrew with
+  dashes and attached punctuation: a hand-count of the words is wrong for
+  reasons that have nothing to do with segmentation, so asserting it would fail
+  a correct pipeline. The line count is countable, so that is what is asserted.
+- **`handwriting2` asserts an exact word count**, because its glyphs are crisp
+  enough to read with certainty. It is both a pinning test (word grouping and
+  reading order to an exact number) and the control that proves the
+  photographs' looser tolerances are not concealing a pipeline that has stopped
+  finding anything.
+
+The punch holes in `handwriting3` are the sharpest assertion in the file:
+`mustNotDetect` lists three rectangles, and no returned box may overlap any of
+them. At ~1800 px each they are 0.1% of the frame — nowhere near
+`maxBlobAreaFrac` — so rejecting them requires line clustering to be working,
+which is exactly what should be being tested.
+
+The test:
 
 1. loads the buffer with `fs.readFileSync` — no canvas, no decoder;
 2. runs `segmentSync` with `crop: false`;
-3. asserts `words.length` is within `tolerance` of `expectedWords`;
-4. asserts every box is inside the image and non-degenerate (`w>0, h>0`);
-5. asserts the reading order is monotone in `y` — the ordering property that
-   must not regress even when counts do.
-
-`expectedWords` is filled in **once**, by running the pipeline and recording the
-result, and never adjusted afterwards except by a deliberate, commented change
-to `thresholds.ts`. That is the entire point: a fixture whose expectation moves
-with the implementation tests nothing.
-
-`manifest.json` stores `expectedWords` (the recorded count) and `tolerance` (an
-**absolute** count, `round(0.12 × expectedWords)`). Absolute rather than
-relative so the test reads `expect(count).toBeGreaterThanOrEqual(expected -
-tolerance)` and a judge reading a failure sees a number, not a ratio. A
-photograph does not have one correct answer, but it has a narrow band, and a
-threshold change that stops finding words in real ink falls outside it.
+3. asserts the line count is within tolerance of `expectedLines`;
+4. for `handwriting2` only, asserts the word count equals `expectedWords`;
+5. asserts every box is inside the image, non-degenerate (`w>0, h>0`), and
+   overlaps no `mustNotDetect` rectangle;
+6. asserts reading order is monotone in `y` — the ordering property that must
+   not regress even when counts do.
 
 **Done when**
 
@@ -918,6 +947,10 @@ threshold change that stops finding words in real ink falls outside it.
   constant. (`THRESH` itself is `Object.freeze`d, so it cannot be patched; this
   test is the reason the parameter exists.)
 - the test runs in under 3 s for all three
+- **and this one, which no test can do:** a person has looked at the boxes
+  drawn over `handwriting1.gray` and said they land on words. See M2's exit
+  criterion. Numbers catch a pipeline that has broken; they do not catch one
+  that has merely got worse.
 
 ### 6.14 Failure messages
 
@@ -1875,6 +1908,37 @@ the expensive places are front-loaded: M2 (segmentation quality) and M8 (Hebrew
 PDF) are the two places where a subtle, silent, demo-looking-correct failure is
 possible. Everything else fails loudly and is cheap to fix.
 
+### 13.1 Two phases, not twelve milestones of tests-first
+
+The work is split so that **M0–M2 get their tests written in a dedicated pass
+before any of their implementation exists**, and everything after that runs
+test-first inside its own milestone.
+
+Why only M0–M2: those three are pure. `domain/` and `engine/` import no DOM, no
+React, no browser API, and no ProseMirror, so a test for them is a function call
+with an expected value and nothing else — which is the one kind of test an agent
+writes correctly when left alone. They are also where being wrong is most
+expensive (M2 is the segmentation gate) and where self-grading is most fatal
+(§6.13). They are worth a whole session of undivided attention.
+
+Why not M3–M11: those tests are mostly about integration with things that only
+exist once something is running — ProseMirror's DOM round trip, worker message
+transfer, `content-visibility` in a real browser, blob URL lifetime, native RTL
+caret behaviour. A test written for them in advance encodes guesses about APIs
+that have not been touched, and the result is a pile of red tests whose failures
+are about the guesses rather than the code. Test-first is the discipline that
+matters; writing them three weeks before the implementation is not a higher
+form of it.
+
+| Phase | Session | Contains |
+|---|---|---|
+| **A** | one | M0 scaffold, then every test for M1 and M2 (§6.0–6.14). No implementation beyond the scaffold. |
+| **B** | the rest | Implement M1–M2 until those tests are green. Then M3 onward, test-first within each milestone. |
+
+Phase A ends with `npm test` reporting failures — that is the correct outcome
+and it is not a problem to fix in that session. Phase B starts by making them
+pass.
+
 ### M0 — Scaffold
 **Goal:** the offline rebuild works before any product code exists.
 **Exit:** §2.7, all five items.
@@ -1894,9 +1958,15 @@ code whose only real judge is a photograph.
 **Exit:** every §6.5–6.13 test green, including the three real fixtures with
 recorded tolerances, the `pipeline.ts` no-literals assertion, the no-recognition
 grep, and the deliberate-degradation test proving the fixture test can go red.
-**Notes:** fill `manifest.json` here. If the fixtures do not pass, stop and fix
-segmentation before writing anything else — every later milestone assumes a
-working segmenter, and a broken one makes every later bug ambiguous.
+**Exit, additionally and non-automatically:** someone has run
+`?stress=1`, looked at the boxes drawn over a real photograph of their own
+handwriting, and confirmed they land on words. No test substitutes for this,
+which is why the fixture ground truth is hand-counted: a number recorded from
+the implementation's own output would make the only real check optional.
+
+**Notes:** if the fixtures do not pass, stop and fix segmentation before writing
+anything else — every later milestone assumes a working segmenter, and a broken
+one makes every later bug ambiguous.
 
 ### M3 — Platform and workers
 **Goal:** decode, crop, encode, store, worker, streaming client.
@@ -1960,7 +2030,7 @@ joining scripts**, per `DESIGN.md` §14); `.env.example`; Docker verified with
 checkout.
 **Exit:** all six acceptance items pass on a clean machine.
 
-### 13.1 Cut order
+### 13.2 Cut order
 
 If the schedule slips, cut in this order, and only in this order:
 
@@ -1976,7 +2046,91 @@ are the product.
 
 ---
 
-## 14. Acceptance mapping
+## 14. Working agreement
+
+Written for whoever — human or model — is implementing this. It exists because
+the largest risk to this project is not that the code cannot be written. It is
+that the code and the tests grading it are written by the same mind in the same
+session, agree with each other, and disagree with a photograph.
+
+### 14.1 Writing tests
+
+1. **Assert behaviour, never implementation.** If the assertion names a private
+   function, an internal data structure, or a step of an algorithm, it is a test
+   of the implementation and it will fail the day the implementation improves.
+   Assert on the values that cross a port boundary.
+2. **Before writing a test, predict what a wrong implementation returns.** If
+   the test would pass anyway, it is not a test — delete it or strengthen it.
+   This is the single most useful habit in TDD and the one most often skipped
+   when the loop is automated.
+3. **Watch it fail.** A test that has never failed has never been tested. Run
+   it before implementing and read the failure message.
+4. **Never adjust an expectation to make a run pass.** An expectation in
+   `manifest.json` is ground truth counted from a photograph. An expectation in
+   a test is the contract in this document. When code and expectation disagree,
+   the code is wrong, or the design is wrong — decide which, and say so. Editing
+   the number to match the output is the failure this document exists to
+   prevent, and §16.2's first row is what it costs.
+5. **Exact over ranged over unchecked.** An exact assertion is best; a range is
+   fine when the truth is a range, and `manifest.json` records which it is and
+   why; no assertion at all is only acceptable where the property is genuinely
+   untestable and the test then proves something else.
+6. **Source-text assertions are legitimate.** The `pipeline.ts` no-literals
+   check (§6.12), the no-recognition grep (§6.10) and the `domain/` import
+   check (M1) assert on the source text. Write them as such, with the pattern
+   spelled out in the test, rather than weakening them into something that does
+   not actually constrain anything.
+
+### 14.2 The four ways these tests go wrong
+
+Named because naming them is most of the defence. Each has happened to real
+test suites written this way.
+
+| # | Failure | What it looks like | The fix |
+|---|---|---|---|
+| 1 | **Self-grading** | A fixture or snapshot fails, so the number is recorded from the output | Ground truth is counted from the source, not from the run. §6.13, §16.1 |
+| 2 | **The test that cannot fail** | `expect(result.ok).toBeDefined()`, or an assertion the wrong implementation also satisfies | Rule 14.1.2: predict the wrong answer first |
+| 3 | **The weakened adversarial test** | "the fixture test can go red" is written as *the test exists* rather than *bumping a threshold makes it red* | §6.13 specifies the mutation. Write the mutation, not the intention |
+| 4 | **The test written to the implementation** | Written after the code exists, asserting what the code does | Write it first; if you cannot, it is failure 4 and it needs deleting |
+
+The first is the dangerous one, because it produces a green suite and false
+confidence, and because it is the path of least resistance exactly when the
+build is behind.
+
+### 14.3 Implementing
+
+1. **Smallest thing that makes the next test pass.** Not the next three tests.
+2. **Do not edit a test to make it pass, in the same commit.** Either the code is
+   wrong, or the document is wrong. Both are legitimate; doing it quietly is
+   not. If it is the document, change the document in its own commit and say
+   why.
+3. **Nothing gets built that no test names** (§0 rule 3). Not a helper, not a
+   config option, not a UI affordance.
+4. **No new dependency** without recording what it replaced (§2.6).
+5. **No recognition code**, ever. Not disabled, not behind a flag, not "just
+   for cleaning up boxes". This is the product's premise (G3) and §6.10's grep
+   test is written to catch exactly this.
+
+### 14.4 When to stop and ask
+
+Stopping is the correct action, not a failure to finish, in each of these:
+
+- a signature cannot be satisfied without a decision this document does not
+  make;
+- a test cannot be written as specified, and writing it anyway would mean
+  inventing the requirement;
+- two rules in this document conflict;
+- a fixture fails in a way that suggests the *design* is wrong rather than the
+  code — for example if line clustering keeps splitting real lines, the answer
+  is a change to §6.8, not a wider tolerance;
+- anything at all would require editing the ground truth in `manifest.json`.
+
+The last one is absolute. If the only way to make a fixture pass is to change
+what the photograph says, stop.
+
+---
+
+## 15. Acceptance mapping
 
 Every acceptance item, traced to the milestone and the tests that prove it.
 
@@ -2004,9 +2158,9 @@ Requirement-level trace:
 
 ---
 
-## 15. Risks and deviations
+## 16. Risks and deviations
 
-### 15.1 Deviations from DESIGN.md
+### 16.1 Deviations from DESIGN.md
 
 | # | Deviation | Reason |
 |---|---|---|
@@ -2016,7 +2170,7 @@ Requirement-level trace:
 | 5 | **The HTML export reproduces the paginated layout** with absolutely positioned lines, rather than emitting reflowing semantic markup (E20). | `DESIGN.md` §9 requires the two renderers to differ only in how they draw, and acceptance 5 compares the files. Not recorded here, it would have been discovered as "the HTML and the PDF don't quite match". |
 | 6 | **`pdf-lib` font embedding uses `subset: false` and the full static font** (E1), where `DESIGN.md` §8.4 implies subsetting. | Removes the pdf-lib #688 blank-glyph failure class outright rather than mitigating its probability. |
 
-### 15.2 Risks carried into implementation
+### 16.2 Risks carried into implementation
 
 | Risk | Where it is answered | Residual |
 |---|---|---|
@@ -2028,7 +2182,7 @@ Requirement-level trace:
 | 3,000 chunks degrade typing | §11.9 `content-visibility`, §11.7 measurement | If it is not enough, the escalation is source virtualisation (§11.9) — not structural virtualisation, which would break native selection |
 | Scope creep into recognition | §6.10's grep test over `engine/segmentation` | Only guards the segmentation tree; a recognition attempt elsewhere would not be caught. The README's scope list is the second line of defence |
 
-### 15.3 The three things most likely to be wrong
+### 16.3 The three things most likely to be wrong
 
 Recorded now, while they are hypothetical, because each will look correct:
 

@@ -675,13 +675,17 @@ renderer asks for the same boxes and emits `dir` attributes instead.
 
 **Real-handwriting regression.** Unit tests built from synthetic buffers would
 only prove the algorithm runs, not that it still segments real photographs. So we
-commit three real handwriting photos, converted to raw single-channel grayscale
-fixtures (~4.2 MB total, no dependencies, no decoder needed to read them), plus
-the expected number of words each must yield. The test asserts a tolerance, not
-an exact count, because the correct answer for a photograph is not a single
-integer — and it asserts the tolerance was set from a real run, so it cannot be
-widened to hide a regression. This catches the regression that matters: a
-threshold change that quietly stops finding words in real ink.
+commit three images, converted to raw single-channel grayscale fixtures (4.2 MB
+total, no dependencies, no decoder needed to read them): two photographs of
+dense handwritten Hebrew notebook pages, and one clean digital rendering of
+Hebrew text that serves as an exact-count control. Each fixture records the
+ground truth **counted by hand from the image**, with a stated tolerance where
+the count is not exact — never recorded from the pipeline's own output, which
+would make the test grade the implementation with itself. The punch holes in one
+photograph must not produce a single box. This catches the regression that
+matters: a threshold change that quietly stops finding words in real ink. It does
+not replace looking at the boxes over a photograph, which is why M2's exit
+criterion includes a human.
 
 **Excluded from the test command.** Playwright. `npm test` is Vitest only and
 never invokes a browser, so the offline one-command rebuild is unaffected.
