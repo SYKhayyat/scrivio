@@ -4,7 +4,14 @@
 > not an implementation guide and carries no schedule.
 
 **Status:** accepted design for the rewrite. Supersedes `ARCHITECTURE.md`, which
-describes the previous implementation and is kept only as historical reference.
+describes the previous implementation and is kept only as historical reference
+in the archived `scrivio_old` repository.
+
+The implementation specification — exact signatures, algorithms, worker
+protocols, per-module test lists and the build order — is
+[`DETAILED-DESIGN.md`](./DETAILED-DESIGN.md). Where the two disagree on a
+detail, the detailed design governs; where they disagree on a decision, this
+document governs.
 
 ---
 
@@ -64,7 +71,7 @@ possible, but each one was deliberate.
 | D7 | **Page size chosen at export**, defaulting to the first photo's aspect. | Fixed A4 during editing | Follows from D5. The document has no intrinsic page until it is printed |
 | D8 | **HTML export inlines each chunk as a base64 JPEG data URI.** | Embedded ZIP + unpack script; PNG | Universally viewable with no script execution, and survives being opened in a text editor. Size is acceptable — see §9.2 |
 | D9 | **PDF via `pdf-lib` in a Worker.** | Browser print dialog; WASM PDF writer | The SRS explicitly rejects the print dialog. The Worker keeps the UI responsive during a 100-page export |
-| D10 | **Vitest only.** Engine tests run in Node against the real code. | Playwright e2e | Playwright needs pre-installed browsers in the image, which complicates the one-command offline rebuild. The cost is real e2e coverage |
+| D10 | **Vitest is the test command.** Engine tests run in Node against the real code. Playwright e2e is retained as a separate `npm run e2e`, outside `npm test` and outside the Docker image's command. | Dropping e2e entirely | Playwright needs pre-installed browsers, which would complicate the one-command offline rebuild — but acceptance items 2–6 deserve automated coverage, and excluding it from `npm test` and from the Docker `CMD` costs the rebuild nothing |
 | D11 | **Reading-order regions, columns and dividers are dropped.** | The previous implementation's full region UI | The SRS quality bar explicitly excludes multi-column layouts. The reading-order function keeps a shape that can accept a column count later (§7.2) |
 | D12 | **Chunks are normalised to the typed text's ink height and baseline-aligned.** | Literal crop at natural size | Otherwise a page of handwriting renders with wildly mismatched word sizes and ragged lines, and the "one document" illusion collapses |
 | D13 | **Direction is explicit at three levels and owned by the model.** Per upload, per block, free within a block via the browser. | `dir="auto"`; CSS-only direction toggles | Chunk ordering and visual order must agree, and only the model can guarantee that (§6.5). Auto-detection has nothing to infer from in a block of images |
@@ -668,16 +675,19 @@ renderer asks for the same boxes and emits `dir` attributes instead.
 
 **Real-handwriting regression.** Unit tests built from synthetic buffers would
 only prove the algorithm runs, not that it still segments real photographs. So we
-commit three real handwriting photos, downscaled and stored as single-channel
-grayscale binary fixtures (roughly 100–200 KB each, no dependencies), plus the
-expected number of words each must yield. The test asserts a tolerance, not an
-exact count, because the correct answer for a photograph is not a single integer.
-This catches the regression that matters: a threshold change that quietly stops
-finding words in real ink.
+commit three real handwriting photos, converted to raw single-channel grayscale
+fixtures (~4.2 MB total, no dependencies, no decoder needed to read them), plus
+the expected number of words each must yield. The test asserts a tolerance, not
+an exact count, because the correct answer for a photograph is not a single
+integer — and it asserts the tolerance was set from a real run, so it cannot be
+widened to hide a regression. This catches the regression that matters: a
+threshold change that quietly stops finding words in real ink.
 
-**Excluded.** Playwright. Pre-installed browsers in the Docker image would put
-the offline one-command rebuild at risk, and the acceptance path can be driven
-manually.
+**Excluded from the test command.** Playwright. `npm test` is Vitest only and
+never invokes a browser, so the offline one-command rebuild is unaffected.
+`npm run e2e` exists and is documented in the README; it needs
+`npm run e2e:install` first, and no judge is required to run it to reach
+acceptance.
 
 ## 11. Stress route
 

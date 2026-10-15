@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Real handwriting regression fixtures. Each .gray file is raw 8-bit",
+    "single-channel luma, row-major, width*height bytes, no header.",
+    "Generated from photographs in the archived scrivio_old repo:",
+    "  magick <src> -auto-orient -resize '1600x1600>' -colorspace Gray -depth 8 out.gray",
+    "expectedWords is filled in by the M2 milestone (run the pipeline once, record",
+    "the count, keep the tolerance). tolerance is the allowed absolute deviation."
+  ],
+  "fixtures": [
+    {
+      "file": "handwriting1.gray",
+      "width": 1600,
+      "height": 900,
+      "source": "handwriting1.jpg (3264x1836 phone photo, landscape note)",
+      "expectedWords": null,
+      "tolerance": null
+    },
+    {
+      "file": "handwriting2.gray",
+      "width": 1056,
+      "height": 816,
+      "source": "handwriting2.jpg (1056x816 scan)",
+      "expectedWords": null,
+      "tolerance": null
+    },
+    {
+      "file": "handwriting3.gray",
+      "width": 1215,
+      "height": 1600,
+      "source": "handwriting3.png (1591x2096 phone photo, portrait page)",
+      "expectedWords": null,
+      "tolerance": null
+    }
+  ]
+}
