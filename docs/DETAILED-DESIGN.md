@@ -23,7 +23,7 @@ Three rules govern everything below.
    "Done when" list does not exist yet.
 
 Where this document contradicts `DESIGN.md`, `DESIGN.md` wins and this document
-is wrong — except for the deviations recorded in §14, which were agreed
+is wrong — except for the deviations recorded in §15.1, which were agreed
 explicitly.
 
 ### 0.1 Build order at a glance
@@ -43,7 +43,7 @@ M4 editor ──► M5 source panel ──► M6 footnotes ──► M7 paginati
 ```
 
 M0–M2 are the risk-bearing part. M7–M9 are the largest amount of code. Full
-milestone definitions, including what to cut if time runs short, are in §11.
+milestone definitions, including what to cut if time runs short, are in §13.
 
 ---
 
@@ -74,7 +74,8 @@ Each is a decision, not a preference.
 | E17 | Lists | Three commands: `wrapInBulletList`, `wrapInOrderedList`, `liftOutOfList`. No nesting. | SRS FR3 asks for flat lists. Nesting is a schema and export change with no requirement behind it. |
 | E18 | Footnote marker rendering | Inline `<sup>` widget decoration, number recomputed from the document on every change. Footnote text lives in plugin state, not in the document. | `DESIGN.md` §6.3. The consequence to hold onto: a footnote is not portable by copy/paste, and that is accepted — a pasted footnote ref without an entry renders as a plain superscript with no number, per E14's sibling rule. |
 | E19 | Paste of a chunk | `parseDOM` matches `data-chunk-id`. If the store has no bytes for that id, the node is kept and rendered as a placeholder. | Never drop user data on paste. The alternative — rejecting the paste — loses more than it protects. |
-| E20 | ESLint | Not included. `npm run typecheck` (`tsc --noEmit`, `strict`) is the static gate. | One more toolchain in the offline rebuild for a codebase this size buys little. TypeScript's strict mode catches the class of error that matters here. |
+| E20 | Does the HTML export reproduce the paginated layout, or emit semantic reflowing markup? | **Paginated**: every line is absolutely positioned at the coordinates `paginate` computed. Lists survive as `class="li"` + `data-list` + `data-n` on the line. | `DESIGN.md` §9's whole point is that the two renderers differ only in how they draw. Semantic `<ul>` markup would re-flow differently from the PDF on any page whose line breaking was tight, and acceptance 5 compares the two files. Mobile reflow is out of scope anyway. The cost is that the HTML is laid-out geometry rather than reflowing prose, which is recorded here rather than discovered by a judge. |
+| E21 | ESLint | Not included. `npm run typecheck` (`tsc --noEmit`, `strict`) is the static gate. | One more toolchain in the offline rebuild for a codebase this size buys little. TypeScript's strict mode catches the class of error that matters here. |
 
 ### 1.1 Things this document deliberately does not specify
 
@@ -200,7 +201,7 @@ packages `prosemirror-model`, `prosemirror-state`, `prosemirror-view`,
 Dev: `vite`, `vitest`, `typescript`, `@vitejs/plugin-react`, `@types/react`,
 `@types/react-dom`, `@types/node`, `jsdom`, `@testing-library/react`,
 `@testing-library/user-event`, `@testing-library/jest-dom`,
-`@playwright/test`, `fontkit`.
+`@playwright/test`, `fontkit`, `pdfjs-dist`.
 
 `fontkit` earns its place: §9.5 asserts that the committed font actually
 contains Hebrew glyphs, and `pdf-lib`'s own copy is not a direct dependency.
@@ -259,9 +260,10 @@ export interface SourcePage {
   id: Id
   widthPx: number          // original photo width
   heightPx: number
-  thumbUrl?: string        // main-thread-only; never sent to a worker
-  displayUrl?: string
 }
+// Deliberately no image URLs here. `DocView` is `structuredClone`d into the PDF
+// worker, and a `blob:` URL is meaningless there. The UI keeps its own
+// `Map<Id, string>` of object URLs for the source panel.
 
 export interface ChunkGeometry {
   chunkId: Id
@@ -319,7 +321,9 @@ export interface PageSpec {
 
 export interface PlacedRun {
   kind: 'text'
-  text: string            // already in visual order
+  /** Logical order, as typed. The PDF renderer reorders per line (§8.3); the
+   *  HTML renderer emits it as-is and lets the browser do bidi. */
+  text: string
   rtl: boolean            // bidi level parity of this run
   xMm: number
   widthMm: number
@@ -375,9 +379,11 @@ Two properties of these types are load-bearing:
   `ui/editor/to-docview.ts` and consumed by everything below `application/`.
   It is plain JSON and survives `structuredClone`, which is what lets it cross
   into the PDF worker.
-- **`PlacedLine.items` are already in visual order and already positioned.**
-  An exporter that reorders or re-measures anything is duplicating
+- **`PlacedLine.items` are already positioned.** An exporter that re-breaks
+  lines, re-measures them or re-decides page breaks is duplicating
   `paginate()`, which is the one duplication `DESIGN.md` §9 exists to prevent.
+  The PDF renderer re-runs bidi *within* a line (§9.3) but may not move a line
+  or change its width; it asserts agreement instead.
 
 ---
 
@@ -397,9 +403,25 @@ export type SegmentFailure = 'too-dark' | 'too-low-contrast' | 'almost-empty'
 export type SegmentationResult =
   | { ok: true; boxes: Box[]; lineIndexOf: number[]; baselineOf: number[]; chunks: CroppedChunk[] }
   | { ok: false; reason: SegmentFailure }
-export interface CroppedChunk { chunkId: Id; bytes: Uint8Array; boxW: number; boxH: number }
+export interface CroppedChunk {
+  chunkId: Id
+  bytes: Uint8Array
+  boxW: number            // padded crop, original photo pixels
+  boxH: number
+  inkOffsetY: number      // ink top relative to the crop's top edge
+  /** chunks[i] is the crop of boxes[i]. Parallel arrays throughout. */
+}
 export interface SegmentationPort {
   segment(rgba: RGBA, opts: SegmentationOptions): Promise<SegmentationResult>
+}
+
+// image-decode.ts
+export type DecodeFailure = 'decode-failed'
+export type DecodeResult =
+  | { ok: true; bitmap: ImageBitmap; widthPx: number; heightPx: number }
+  | { ok: false; reason: DecodeFailure }
+export interface ImageDecodePort {
+  decode(file: Blob): Promise<DecodeResult>
 }
 
 // text-measurer.ts
@@ -417,9 +439,11 @@ export interface PaginationPort {
 // html-export.ts / pdf-export.ts
 export interface ExportProgress { (fraction: number, note: string): void }
 
+// No `fonts` parameter: D15 says the HTML export ships no webfont, so an HTML
+// exporter that accepted a font set would be inviting a violation.
 export interface HtmlExportPort {
   export(doc: DocView, layout: PageLayout, chunks: ChunkImageStore,
-        fonts: FontSet, onProgress?: ExportProgress): Promise<Blob>
+        onProgress?: ExportProgress): Promise<Blob>
 }
 export interface PdfExportPort {
   export(doc: DocView, layout: PageLayout, chunks: ChunkImageStore,
@@ -434,10 +458,10 @@ box path) also uses, and it should not carry segmentation's line bookkeeping.
 
 ### 5.1 `ChunkImageStore`
 
-Not a port in the SOLID sense — it is a resource both exporters need, and it
-lives in `platform/` because it owns `URL.createObjectURL`. Its interface is
-the one specified in `DESIGN.md` §6.2: it answers a worker's request for
-**bytes**, never a main-thread-only `blob:` URL.
+The interface lives in `engine/ports/chunk-store.ts` like every other port; the
+implementation lives in `platform/blob-store.ts`, because it owns
+`URL.createObjectURL`. Its shape is the one `DESIGN.md` §6.2 specifies: it
+answers a worker's request for **bytes**, never a main-thread-only `blob:` URL.
 
 ```ts
 export interface ChunkImageStore {
@@ -466,6 +490,21 @@ Two rules that exist because getting them wrong is invisible:
 
 ## 6. M1–M2 — Domain and segmentation
 
+### 6.0 `domain/units.ts`
+
+```ts
+export const MM_PER_PT = 25.4 / 72
+export const PT_PER_MM = 72 / 25.4
+```
+
+Every conversion between points and millimetres in the project goes through
+these two constants. `pdf-lib` works in points, the paginator and the layout in
+millimetres, and the HTML export uses CSS millimetres, so the conversion is on
+three code paths and one of them will otherwise get a 2.8346 typed inline.
+
+**Done when:** `it('round-trips pt and mm')` — `mm * PT_PER_MM * MM_PER_PT`
+is within 1e-9 of `mm`.
+
 ### 6.1 `domain/ids.ts`
 
 `newId(prefix: string): Id` — `prefix + '-' + base36(time) + '-' +
@@ -483,7 +522,7 @@ Per-photo normalisation (E5).
 ```ts
 export interface ChunkScaleInput {
   photoWidthPx: number
-  chunks: { chunkId: Id; inkH: number }[]
+  chunks: { chunkId: Id; inkW: number; inkH: number; boxW: number; boxH: number }[]
   pageWidthMm: number
   targetInkMm: number
 }
@@ -498,21 +537,34 @@ Algorithm, exactly:
 
 ```
 1. mmPerPx = pageWidthMm / photoWidthPx
-2. natural_i = inkH_i * mmPerPx                       // natural display height
+2. natural_i = inkH_i * mmPerPx                       // natural ink display height
 3. median   = median(natural)                         // robust to specks/struck words
-4. if median == 0 -> return identity (1.0) with all sizes = inkW/inkH * mmPerPx
+4. if median == 0 -> no chunks, or all degenerate: return { scaleMmPerPx: mmPerPx,
+     sizes: empty } and let the caller report the photo as unusable
 5. k = targetInkMm / median
 6. for each chunk:
-     h = clamp(inkH_i * mmPerPx * k, targetInkMm*0.6, targetInkMm*1.6)
-     w = boxW_i / boxH_i * h
+     inkH' = clamp(inkH_i * mmPerPx * k, targetInkMm*0.6, targetInkMm*1.6)
+     h = inkH' * boxH_i / inkH_i                      // box height carries the same scale
+     w = h * boxW_i / boxH_i
 7. return { scaleMmPerPx: mmPerPx * k, sizes }
 ```
 
+`sizes` holds the size of the **cropped box**, not the ink, because that is what
+an `<img>` needs; `scaleMmPerPx` is the factor that gets ink pixels to
+millimetres, which is what the baseline offset (§11.3) needs. Two numbers, two
+consumers, both derived here rather than in a node view.
+
 `targetInkMm` is derived from the type style, not chosen freely:
-`targetInkMm = fontPt * 0.72 / PT_PER_MM * 1.0` — an 11 pt face has roughly
-0.72 em of x-height-to-cap band for handwriting, which is what makes the ink
-and the type look like the same document. This constant is named
-`chunk-scale.ts:TARGET_INK_EM`.
+
+```ts
+const TARGET_INK_EM = 0.72                      // x-height band of a typical face
+export function targetInkMm(fontPt: number) {
+  return fontPt * TARGET_INK_EM * MM_PER_PT
+}
+```
+
+At 11 pt that is 2.79 mm of ink, which is what makes handwriting and 11 pt type
+read as one document rather than two sizes of thing.
 
 The clamp in step 6 is what stops one pathological blob (a struck-through
 word, a shadow fragment) from setting the line height for everything around
@@ -545,7 +597,7 @@ function is the editor-side view and the source-panel view only.
 **Done when**
 
 - two refs to the same source photo number 1, 2; a different photo restarts at 1
-- refs in nested list items are numbered in document order
+- refs inside list items are numbered in document order (lists are flat, E17)
 - an unknown footnote id is skipped, not thrown on (E18)
 - the walk is a single pass and touches no chunk images (assert via a fixture
   where `bytesOf` would throw if called)
@@ -571,11 +623,19 @@ export const THRESH = {
 
 ### 6.5 `engine/segmentation/luma.ts`
 
-`toLuma(rgba: RGBA): Uint8Array` — integer BT.601, `v = (77*r + 150*g + 29*b) >> 8`.
+```ts
+export function toLuma(rgba: RGBA): Uint8Array          // v = (77r + 150g + 29b) >> 8
+export function lumaStats(luma: Uint8Array): { mean: number; std: number }
+```
+
+`lumaStats` exists because pipeline stage 0 (§6.12) needs the mean and standard
+deviation of the *whole* image to answer `too-dark` and `too-low-contrast`, and
+because a local mean is cheap from the integral image but a global one is not —
+computing it once here keeps it out of the hot loop.
 
 **Done when:** pure colours map to the expected values (`#808080` → 127 or
-128, `#fff` → 255, `#000` → 0); output length is `w*h`; an all-grey image has
-zero variance.
+128, `#fff` → 255, `#000` → 0); output length is `w*h`; `lumaStats` on an
+all-grey image reports `std === 0`.
 
 ### 6.6 `engine/segmentation/binarize.ts`
 
@@ -588,12 +648,21 @@ Integral image: `S` is `Uint32Array((w+1)*(h+1))`, running sums of `luma`. Max
 sum at 2400×1800 is 2400*1800*255 ≈ 1.1e9 — inside `Uint32`, so no `Float64`
 and no overflow.
 
-Window `W` = odd, `clamp(round(min(w,h)/windowDivisor), windowMin, windowMax)`
-forced odd. Per pixel, `mean = (S[..] - S[..]) / (W*W)`; ink iff
-`v < mean - max(binarizeCFloor, binarizeCFrac * std)` where `std` is the local
-standard deviation from the same integral sums (`sqrt(max(0, E[x²] - mean²))`
-scaled). The `binarizeCFloor` term is what keeps a blank page from
-binarising its own noise.
+Window `W` = `clamp(round(min(w,h)/windowDivisor), windowMin, windowMax)`,
+forced odd. Per pixel, `mean = windowSum / (W*W)`; ink iff
+`v < mean - max(binarizeCFloor, binarizeCFrac * std)`, where `std` is the local
+standard deviation, `sqrt(max(0, sumSq/(W*W) - mean*mean))`.
+
+**Two integral images are required, and they are not the same type.** `S1` sums
+`luma` and fits `Uint32Array` (max 4.32e6 × 255 ≈ 1.1e9 < 4.29e9). `S2` sums
+`luma²`, and its maximum is 4.32e6 × 65025 ≈ **2.8e11**, which overflows
+`Uint32Array` silently and produces a threshold that looks plausible while
+binarising almost nothing. `S2` is a `Float64Array`. This is stated because it
+is the kind of bug that passes a unit test on a 300×300 input and fails on a
+real photograph.
+
+The `binarizeCFloor` term is what keeps a blank page from binarising its own
+noise.
 
 Adaptive, not global Otsu: phone photos of paper have a lighting gradient, and
 a single global threshold turns the shadowed corner of a page into a solid
@@ -608,13 +677,19 @@ thing to revisit if segmentation fails on a real photograph.
 - `out` is `Uint8Array(w*h)` with values 0 or 1 only
 - the window size is odd and within `[windowMin, windowMax]` for a 300 px and a
   5000 px input
-- stats reports mean and std that match a brute-force computation on a small
-  input
+- the local std matches a brute-force computation on a small input
+- a uniform image at 2400×1800 produces no ink, which fails loudly if `S2` has
+  overflowed to `NaN` (the assertion is on the image, not on the internals)
 
 ### 6.7 `engine/segmentation/components.ts`
 
 ```ts
-export interface Blob { x0: number; y0: number; x1: number; y1: number; area: number; fill: number }
+export interface Blob {
+  id: number                 // stable index, assigned here, used by §6.9/§6.10
+  x0: number; y0: number; x1: number; y1: number
+  area: number
+  fill: number
+}
 export function connectedComponents(ink: Uint8Array, w: number, h: number,
                                     minArea: number): Blob[]
 ```
@@ -737,16 +812,20 @@ export function orderReading(boxes: Box[], lines: Line[],
                              opts: { direction: Direction; columns: number }): Box[]
 ```
 
-`columns` is honoured only for `1` today; a value > 1 is a `throw` in
-development and is documented as unimplemented rather than silently behaving as
-1 (a silent fallback here would be D11 violated quietly). Lines top-to-bottom;
-within a line, `x0` ascending for LTR, `x1` descending for RTL.
+`columns` is honoured only for `1` today. A value > 1 **throws** with a message
+naming the unimplemented option — silently behaving as 1 would violate D11
+quietly, which is the worst way to violate it.
 
-The extension seam is real and tested: a test feeds a two-column fixture and
-asserts the *shape* of the expected order — column-major, each column
-top-to-bottom, RTL columns right-to-left — against a reference function in the
-test file, so the moment D11 is implemented the test flips from
-"documents the seam" to "verifies the behaviour" by deleting one function.
+Lines top-to-bottom; within a line, `x0` ascending for LTR, `x1` descending for
+RTL.
+
+The extension seam is pinned by a test, not by a stub: `columns-throw.test.ts`
+asserts the throw, and `columns-expected-order.test.ts` holds the expected
+two-column ordering **as data** — column-major, each column top-to-bottom, RTL
+columns right-to-left — currently unreachable, and asserted against nothing.
+When D11 is implemented the second test deletes its `it.skip` and gains an
+argument. That way the answer is written down before the code exists, and
+cannot be invented to match whatever the code happens to do.
 
 **Done when**
 
@@ -768,8 +847,7 @@ Stage order, with the decision each stage owns:
 
 | # | Stage | Module | Decision |
 |---|-------|--------|----------|
-| 0 | Stats | `luma` | mean < `tooDarkMean` → `too-dark`; std < `tooFlatStd` → `too-low-contrast` |
-| 1 | Luma | `luma` | — |
+| 1 | Luma + global stats | `luma` | mean < `tooDarkMean` → `too-dark`; std < `tooFlatStd` → `too-low-contrast` |
 | 2 | Binarise | `binarize` | — |
 | 3 | Components | `components` | drop `area < max(minBlobArea, minBlobAreaFrac*w*h)`; drop `area > maxBlobAreaFrac*w*h` (borders, shadows, a hand) |
 | 4 | Lines | `lines` | — |
@@ -794,7 +872,8 @@ downscaling can put the last row half a pixel outside.
 - a synthetic buffer with 12 drawn word-like strokes yields 12 boxes, in order
 - an all-white buffer returns `{ ok: false, reason: 'too-low-contrast' }`
 - a near-black buffer returns `'too-dark'`
-- a buffer with three or fewer blobs returns `'almost-empty'`
+- a buffer yielding fewer than `minWordsForSuccess` words returns
+  `'almost-empty'`, whatever the blob count
 - boxes are in original photo coordinates (assert against a known scale factor)
 - a stage-order regression: two strokes in the same line with a wide gap produce
   two words, and moving line clustering *after* word grouping would merge them
@@ -821,17 +900,23 @@ result, and never adjusted afterwards except by a deliberate, commented change
 to `thresholds.ts`. That is the entire point: a fixture whose expectation moves
 with the implementation tests nothing.
 
-Tolerances are ±12% of the recorded count. A photograph does not have one
-correct answer, but it has a narrow band, and a threshold change that stops
-finding words in real ink falls outside it.
+`manifest.json` stores `expectedWords` (the recorded count) and `tolerance` (an
+**absolute** count, `round(0.12 × expectedWords)`). Absolute rather than
+relative so the test reads `expect(count).toBeGreaterThanOrEqual(expected -
+tolerance)` and a judge reading a failure sees a number, not a ratio. A
+photograph does not have one correct answer, but it has a narrow band, and a
+threshold change that stops finding words in real ink falls outside it.
 
 **Done when**
 
 - the three fixtures pass with the recorded tolerances
-- deliberately raising `binarizeCFrac` by 30% makes at least one fixture fail
-  (a green test that cannot go red is not a regression test; this assertion is
-  written by temporarily patching `THRESH` inside the test and asserting the
-  count moved outside tolerance)
+- raising `binarizeCFrac` by 30% makes at least one fixture fall outside
+  tolerance. A green test that cannot go red is not a regression test. It does
+  this by calling `binarize` and the downstream stages with
+  `{ ...THRESH, binarizeCFrac: THRESH.binarizeCFrac * 1.3 }` — which is why
+  every stage takes `th: typeof THRESH` as an argument rather than importing the
+  constant. (`THRESH` itself is `Object.freeze`d, so it cannot be patched; this
+  test is the reason the parameter exists.)
 - the test runs in under 3 s for all three
 
 ### 6.14 Failure messages
@@ -860,22 +945,19 @@ manual box path is reachable from the same screen. The app never says "error".
 ### 7.1 `platform/image-decode.ts`
 
 ```ts
-export interface DecodedImage {
-  bitmap: ImageBitmap     // original resolution
-  widthPx: number
-  heightPx: number
-}
-export async function decodeToBitmap(file: Blob): Promise<DecodedImage>
+// platform/image-decode.ts — the ImageDecodePort implementation
+export async function decodeToBitmap(file: Blob): Promise<DecodeResult>
 ```
 
-`createImageBitmap(file)` → `{ ok: true, bitmap }` or
+`createImageBitmap(file)` → `{ ok: true, bitmap, widthPx, heightPx }` or
 `{ ok: false, reason: 'decode-failed' }`. A caught `DOMException` from
 `createImageBitmap` is the expected path for "this is not an image", not an
 exceptional one.
 
-Downscaling happens in the worker, not here (§7.4), because the *original*
-bitmap is needed there for cropping (§6.18) and transferring a 12 MP bitmap to
-transfer it downscaled would be wasteful.
+The bitmap is transferred to the segmentation worker, so the main thread cannot
+use it for anything afterwards — including a thumbnail (§7.4). Downscaling
+happens in the worker, not here, because cropping (§7.2) needs the *original*
+resolution.
 
 **Done when:** a PNG buffer decodes and reports its dimensions; a
 non-image buffer returns `decode-failed` rather than throwing.
@@ -885,18 +967,24 @@ non-image buffer returns `decode-failed` rather than throwing.
 Used inside the worker.
 
 ```ts
+export interface PadFractions { xFrac: number; yFrac: number; minPx: number }
+export const DEFAULT_PAD: PadFractions = { xFrac: 0.06, yFrac: 0.04, minPx: 2 }
+export interface CropResult { bytes: Uint8Array; boxW: number; boxH: number; inkOffsetY: number }
 export async function cropEncode(bitmap: ImageBitmap, box: Box, pad: PadFractions,
-                                 quality: number): Promise<Uint8Array>
+                                 quality: number): Promise<CropResult>
 ```
 
 `OffscreenCanvas(w, h).drawImage(bitmap, sx, sy, sw, sh, 0, 0, w, h)` then
-`convertToBlob({ type: 'image/jpeg', quality })` → `Uint8Array`. Padding is
-E7, clamped to the photo bounds, with a minimum of 2 px on each side so a blob
-touching the photo edge still gets a white margin rather than a hard cut.
+`convertToBlob({ type: 'image/jpeg', quality })` → `Uint8Array`. Padding is E7,
+clamped to the photo bounds, with `minPx` on each side so a blob touching the
+photo edge still gets a white margin rather than a hard cut. `inkOffsetY` is
+`round(padY)` before clamping, and is what puts the ink bottom on the baseline
+later (§11.3).
 
 **Done when:** a crop of a known rectangle produces a JPEG of exactly those
-dimensions; a box at the photo's corner is clamped, not negative; the returned
-bytes start with `FF D8 FF` (it really is a JPEG — asserted, because a silent
+dimensions; `inkOffsetY` equals the top padding applied; a box at the photo's
+corner is clamped, not negative, and `inkOffsetY` reflects the clamped value;
+the returned bytes start with `FF D8 FF` (it really is a JPEG — asserted, because a silent
 PNG here would double the export size and nothing else would notice).
 
 ### 7.3 `platform/blob-store.ts`
@@ -923,6 +1011,7 @@ it.
 export type ToSegWorker =
   | { type: 'segment'; jobId: string; bitmap: ImageBitmap;
       direction: Direction; columns: number; crop: boolean; jpegQuality: number }
+  | { type: 'crop'; jobId: string; bitmap: ImageBitmap; box: Box; jpegQuality: number }
   | { type: 'cancel'; jobId: string }
 
 export type FromSegWorker =
@@ -942,9 +1031,19 @@ once on a phone doubles the peak memory of the largest step for no wall-clock
 gain that the user can see while they wait for photo one.
 
 `crop: true` means the worker also crops and encodes every chunk and returns
-`chunks: CroppedChunk[]` with the byte arrays transferred back. This is the
-step `DESIGN.md` §7.1 insists on: 3,000 `convertToBlob` calls on the main
-thread would freeze the tab exactly as segmentation would.
+`chunks: CroppedChunk[]`. This is the step `DESIGN.md` §7.1 insists on: 3,000
+`convertToBlob` calls on the main thread would freeze the tab exactly as
+segmentation would.
+
+`crop` is a separate message type rather than a `segment` job with a
+pre-set box. A manual box (§10.3) has no segmentation to do, and routing it
+through `segment` would mean either re-segmenting the photo or growing a
+`preSetBox` field that only one caller uses.
+
+Both replies post `transfer: [bitmap]` on the way in and
+`transfer: [...chunks.map(c => c.bytes.buffer)]` on the way out. Without the
+outbound transfer, a 3,000-chunk import copies every JPEG across the boundary
+and the streaming property §7.5 depends on quietly stops holding.
 
 **Done when**
 
@@ -986,18 +1085,29 @@ Breaks one block's inline content into lines. Pure; all measurement through
 
 ```ts
 export type LayoutInput =
-  | { kind: 'text'; text: string; rtl: boolean }
-  | { kind: 'atom'; widthMm: number; heightMm: number; baselineOffsetMm: number; ref: unknown }
+  | { kind: 'text'; text: string }
+  | { kind: 'chunk'; chunkId: Id; widthMm: number; heightMm: number; baselineOffsetMm: number }
+  | { kind: 'footnoteRef'; footnoteId: Id; widthMm: number }
+
+export interface LaidOutItem {
+  /** The input this came from, plus the break that produced this line. */
+  input: LayoutInput
+  widthMm: number         // measured for text, the atom's width otherwise
+}
 export interface LaidOutLine {
-  dir: Direction
   heightMm: number
-  baselineMm: number      // from this line's own top
-  items: (LayoutInput & { widthMm: number })[]
-  text: string            // concatenation of the line's text items, logical order
+  baselineMm: number      // from this line's own top edge
+  items: LaidOutItem[]
+  /** Concatenated text items in logical order — the input to visualRuns (§8.3). */
+  text: string
 }
 export function layoutBlock(items: LayoutInput[], widthMm: number,
                             style: TextStyle, measurer: TextMeasurer): LaidOutLine[]
 ```
+
+Direction is **not** a property of a layout item. `DESIGN.md` §6.5 puts it on
+the block, and a block has exactly one, so carrying it per item would create
+three places to disagree.
 
 Rules, all of which have a test:
 
@@ -1009,11 +1119,13 @@ Rules, all of which have a test:
   mid-combining-mark: skip a break before a codepoint in `\u0300-\u036f`).
   This is the "one very long typed word" case, and silently overflowing it is
   forbidden.
-- Line height is `max(style.fontPt * style.lineHeight, tallest atom on the
-  line)`. A line containing a tall chunk grows rather than clipping it.
-- `baselineMm` is `ascentOf(style)`, except on a line whose tallest atom
-  exceeds the style's ascent, where it becomes the atom's height above its own
-  baseline offset. This is the export equivalent of `DESIGN.md` §6.2's baseline
+- Line height is
+  `max(style.fontPt * style.lineHeight * MM_PER_PT, tallestAtomHeightMm)` — both
+  terms in millimetres. A line containing a tall chunk grows rather than
+  clipping it.
+- `baselineMm = max(measurer.ascentOf(style), …atoms.map(a => a.heightMm -
+  a.baselineOffsetMm))`. For a line with no atoms that is just the style's
+  ascent. This is the export equivalent of `DESIGN.md` §6.2's baseline
   alignment, and the two must agree to within one pixel at 96 dpi — there is a
   test comparing them.
 - An empty block yields one empty line, so an empty paragraph still occupies a
@@ -1022,7 +1134,8 @@ Rules, all of which have a test:
 **Done when:** each rule above has its own test; a mixed
 `[chunk][text "hello world"][chunk]` block breaks only at spaces and atom
 edges; a hard break never lands between a base character and its combining
-mark.
+mark; `heightMm` and `baselineMm` are millimetres, asserted by feeding a
+`TextStyle` of `fontPt: 72` and checking the line height is 72 pt in mm.
 
 ### 8.2 `engine/pagination/paginate.ts`
 
@@ -1039,14 +1152,26 @@ contentBottom = heightMm - marginMm
 contentWidth  = widthMm - 2*marginMm
 
 reserve: Map<pageIndex, footnoteAreaHeightMm>   // start empty
+page = 0
 
 repeat up to 3 times:
   1. flow every block's lines, in block order, into pages:
        cursor = contentTop
        for each line:
-         if cursor + line.heightMm > contentBottom - reserve.get(page) :
+         if cursor + line.heightMm > contentBottom - (reserve.get(page) ?? 0) :
              page += 1; cursor = contentTop
-         place the line: xMm = dir === 'ltr' ? marginMm : widthMm - marginMm - lineWidth
+         lineWidth = sum of its items' widths
+
+         // the anchor: LTR lines start at the left margin, RTL at the right
+         anchor = dir === 'ltr' ? marginMm : widthMm - marginMm - lineWidth
+
+         // items fill from the anchor, so an RTL line's first (logically first,
+         // rightmost) chunk is placed first and ends up on the right
+         x = anchor
+         for item of line.items, in logical order:
+             item.xMm = x
+             x += item.widthMm
+         line.baselineMm = cursor + line.baselineMm   // line-local -> page-absolute
          cursor += line.heightMm
        blocks never reorder and never move backwards; a block that starts past
        the top of a page starts at that page's content top
@@ -1071,16 +1196,32 @@ Three properties this buys, each with a test:
   grows re-flows its own content in the next iteration, so the FR4 requirement
   (numbering restarts at 1 per page, footnote sits at the bottom of that page)
   holds without a special case anywhere in the renderer.
-- **Ordering is a function of direction alone.** Line *filling* is
-  direction-independent — items are placed in model order, which the
-  chunk-ordering invariant guarantees is reading order. `dir` decides only
-  which margin the line is anchored to. Tested both ways on the same fixture,
-  producing mirrored output.
+- **Ordering is a function of direction alone.** Line *filling* and item
+  placement both proceed in model order, which the chunk-ordering invariant
+  guarantees is reading order. `dir` decides only which margin the line is
+  anchored to; everything after that is arithmetic. Tested both ways on the
+  same fixture, producing mirrored output with the same item order.
+
+  The item loop above is the whole RTL placement mechanism. There is no
+  `dir`-aware branch anywhere else, and adding one is the bug this paragraph
+  exists to prevent.
 
 Footnote indent: `6 mm`, numbers followed by `2 mm`, drawn as `¹`-style
-prefixes via a superscript digit run rather than Unicode superscript
-codepoints (the committed font's coverage of U+2070–U+209F is not something to
-depend on).
+prefixes via a superscript digit run rather than Unicode superscript codepoints
+(the committed font's coverage of U+2070–U+209F is not something to depend on).
+
+The footnote area's vertical position is **not** in `PageLayout`, because it is
+fully determined: its top edge is `heightMm - marginMm - reserve(page)`, the
+same expression in both renderers. Storing it would be storing a redundant
+value that could disagree with the space the paginator actually reserved, which
+is precisely the drift §9 exists to prevent. `PlacedFootnote.yMm` is therefore
+absent, and `DESIGN.md` §9.1's "the renderers differ only in how they draw" is
+literally true here.
+
+Footnote text is bidi-processed exactly like body text — a footnote in a Hebrew
+page is Hebrew — and the footnote style is `pageSpec.footnoteFontPt` with the
+same line height. It goes through `visualRuns` for the PDF and `dir` for the
+HTML, like everything else.
 
 **Done when**
 
@@ -1118,8 +1259,13 @@ export function visualRuns(line: string, base: Direction): VisualRun[]
    right granularity rather than a convenience.
 4. Build a visual index order by applying each `[start, end]` flip in order.
 5. Group consecutive visual indices that share embedding-level parity into
-   runs; each run's `rtl` is `level & 1`. Drop trailing whitespace from the
-   last run.
+   runs; each run's `rtl` is `level & 1`.
+
+Whitespace is trimmed in **logical** order, before the flips are applied —
+trailing spaces are stripped from the end of the input string, so that "the
+last run" is never ambiguous once the string has been reversed. Trailing
+whitespace matters at a line break in bidi: it is where UAX #9's own special
+handling lives, which is exactly why `getReorderSegments` takes a line range.
 
 This produces segments, not one reordered string, because the PDF renderer
 needs to measure and place each segment separately (E2). The HTML renderer
@@ -1145,8 +1291,9 @@ entries with a simple clear-on-overflow. In the browser the underlying
 matters because the *paginator* re-measures the same words repeatedly across its
 three convergence iterations.
 
-`tests/fake-measurer.ts` implements `TextMeasurer` as `text.length *
-style.fontPt * 0.5 / PT_PER_MM` — a monospace model. Every layout test uses
+`tests/fake-measurer.ts` implements `TextMeasurer` as
+`text.length * style.fontPt * 0.5 * MM_PER_PT` — a monospace model at 0.5 em
+per character. Every layout test uses
 it, which is what makes §12's "no canvas, no jsdom" claim true for layout.
 
 ---
@@ -1156,10 +1303,18 @@ it, which is what makes §12's "no canvas, no jsdom" claim true for layout.
 ### 9.1 Shared contract
 
 Both exporters receive `DocView`, `PageLayout` and `ChunkImageStore`, and both
-iterate `layout.pages[i].lines[j].items` in the order given. Neither
-re-measures, re-breaks or re-orders anything. The test that proves this is in
-§12: a fake `PageLayout` with deliberately odd placements must come out of each
-renderer in exactly those positions.
+iterate `layout.pages[i].lines[j].items` using the coordinates they are given.
+Neither re-breaks a line, moves it, changes its width, or decides a page break.
+
+One thing *is* recomputed, and it must be: the PDF renderer re-runs bidi within
+each line (§9.3) because PDF has no bidi of its own, while the HTML renderer
+emits logical text and lets the browser resolve it. That is the single permitted
+divergence, and it is bounded — the PDF asserts its reordering agrees with
+`paginate`'s, to within 1%, and fails rather than drawing a line whose pieces do
+not add up.
+
+The test that proves the rest is in §12: a fake `PageLayout` with deliberately
+odd placements must come out of each renderer at exactly those coordinates.
 
 Both fail loudly (G6): a missing chunk, an unbaked font, or an unwritable
 result rejects with a message naming what went wrong.
@@ -1180,32 +1335,37 @@ Structure:
 ```html
 <!doctype html>
 <html lang="he"><head><meta charset="utf-8">
-<title>Scrivio — <n> pages</title>
+<title>Scrivio — 12 pages</title>
 <style> … inlined, no @import, no url() … </style>
 </head><body>
-<section class="page" style="width:210mm;height:297mm;padding:20mm" dir="ltr">
-  <p class="line" dir="rtl" style="…">
+<section class="page" style="width:210mm;height:297mm">
+  <div class="line" dir="rtl" data-list="bullet" style="top:20.0mm;left:20.0mm;width:170mm;height:6.4mm">
     <img alt="" style="width:12.3mm;height:4.1mm;vertical-align:baseline;margin-bottom:-0.2mm">
     <span>שלום</span><sup>1</sup>
-  </p>
-  <ol class="list"><li>…</li></ol>
-  <aside class="fn"><hr><p><sup>1</sup> text…</p></aside>
+  </div>
+  <aside class="fn" style="top:250mm">
+    <hr><div class="fn-line"><sup>1</sup> the note text…</div>
+  </aside>
 </section>
 </body></html>
 ```
 
 Rules:
 
-- **Logical text, `dir` attributes.** The renderer emits `PlacedRun.text` as
-  given (which is already visual order for PDF, logical for HTML — the two
-  differ, and `paginate` must therefore store both, or store logical and let
-  bidi run here). Resolution: `PlacedRun` carries **logical** text plus its
-  `rtl` flag; `visualRuns` (§8.3) is called by the PDF renderer only, on the
-  line's concatenated logical text, and the HTML renderer emits logical text
-  with `dir`. Positions come from `xMm` in both cases, so a line that bidi
-  reorders within itself has its runs placed at the positions `paginate`
-  computed — which is correct, because `paginate` computes those positions from
-  the same `visualRuns` output.
+- **Positioned lines (E20).** `.page` is `position: relative`; each line is a
+  `position: absolute` div at `top` (the line's top edge, derived from
+  `baselineMm - line.baselineMm`-style arithmetic already done by `paginate`),
+  `left`, `width` and `height` from the layout. Nothing re-flows, so the file
+  renders identically to the PDF on any browser that honours millimetres.
+- **Lists as attributes, not containers.** A line inside a list carries
+  `data-list="bullet|number"` and `data-n="<index>"`, and the inlined CSS draws
+  the marker with `::before` at the correct side for `dir`. Copy-paste of a
+  list item keeps the text; a nested `<ol>` would not survive absolute
+  positioning without re-implementing the paginator's line breaking.
+- **Logical text, `dir` attributes.** `PlacedRun.text` is logical (see §4) and
+  is emitted as-is inside a `dir` attribute, so the browser resolves bidi
+  natively. `PlacedRun.xMm` positions the run; the browser's bidi reordering
+  within the run then happens inside that box.
 - Images are `data:image/jpeg;base64,…`, encoded **once** from the bytes
   already in the store. Never re-encoded at export (D8, E7).
 - Escaping: `& < > "` in text and attribute values, always.
@@ -1218,7 +1378,10 @@ Rules:
 **Done when**
 
 - output contains no `http`, no `<script`, no external `url(`
-- every chunk in the layout appears exactly once as a `data:image/jpeg`
+- every chunk *placement* in the layout produces exactly one `data:image/jpeg`,
+  and two placements of the same chunk id produce byte-identical URIs
+- every line's `left` equals the layout's `xMm` (E20 — this is the assertion
+  that would catch a renderer quietly re-flowing)
 - RTL text is emitted in logical order with `dir="rtl"` on its line
 - a chunk id with no bytes in the store throws with the id in the message (E14)
 - `&` and `<` in typed text survive a round trip through the escaping
@@ -1244,11 +1407,13 @@ Runs in `pdf-export.worker.ts` (E13).
 - **Chunk images:** `doc.embedJpg(bytes)` once per chunk id, cached, then
   `page.drawImage(img, { x, y, width, height })` per placement.
 - **Text:** per line, concatenate the line's logical text, run
-  `visualRuns(line, block.dir)`, then place each run at successive x
-  positions derived from `PlacedRun.xMm` and the measured run widths. If the
-  recomputed widths disagree with `paginate`'s by more than 1% the export
-  **fails** rather than drawing a line whose pieces do not add up — a silent
-  mismatch here is how an RTL document ends up with its words overlapping.
+  `visualRuns(line, block.dir)`, and check the resulting run boundaries match
+  the layout's `PlacedRun` entries in order. Then place each run at its
+  `PlacedRun.xMm` — the layout's x, **not** a re-accumulated one, because
+  `paginate` already resolved the RTL anchoring. If a run's measured width
+  disagrees with the layout's by more than 1% the export **fails** rather than
+  drawing a line whose pieces do not add up; a silent mismatch here is how an
+  RTL document ends up with its words overlapping.
 - `doc.save()` → `Uint8Array`.
 
 The one rendering path (D14): there is no rasterised fallback. If
@@ -1257,17 +1422,25 @@ The one rendering path (D14): there is no rasterised fallback. If
 **Done when**
 
 - the output starts with `%PDF-` and its length matches `save()`'s
-- a Hebrew document's extracted text (via `pdfjs-dist`, a devDependency
-  available in the node project) round-trips to the typed strings in the
-  original logical order
+- `pdfjs-dist` (a devDependency, §2.6) extracts each **Hebrew run's**
+  characters in logical order — not reversed. The property that matters is
+  per-run, not per-page: a viewer may reconstruct page reading order by
+  geometry, so asserting whole-page order would be asserting a viewer
+  implementation detail. Assert instead that each extracted run equals the
+  corresponding `visualRuns` output, and that the concatenation of the Hebrew
+  runs equals the source text with the Hebrew parts in logical order.
 - `"שלום world 42"` in an RTL block produces visual runs in the order §8.3
   specifies — asserted by inspecting the drawn content stream order, not by
   eyeballing a rendered page
 - a Latin-only document never embeds the Hebrew font, and a Hebrew document
   always does
 - a missing chunk fails with the chunk id in the message
-- every page's `drawText` x positions are monotonically increasing within a
-  line (the property whose violation means the placement maths is wrong)
+- `drawText` x positions within a line are monotonically increasing in *visual*
+  order, which for an RTL line means increasing left-to-right even though the
+  logical order runs the other way (the property whose violation means the
+  placement maths is wrong)
+- an RTL line's first logical run has the **largest** `xMm` (the one assertion
+  that distinguishes real bidi from a line that happens to look right)
 - a document whose lines exceed the page height sets and reports `overflow`
 
 ### 9.4 `FontSet`
@@ -1314,8 +1487,8 @@ No UI, no DOM, no React. Each takes its ports as arguments and emits events.
 
 ```ts
 export interface ImportDeps {
-  segmentation: SegmentationPort
-  client: SegmentationClient
+  decode: ImageDecodePort
+  client: SegmentationClient   // wraps the SegmentationPort in a worker
   store: ChunkImageStore
 }
 export type ImportEvent =
@@ -1330,7 +1503,8 @@ export async function importPhotos(deps: ImportDeps, files: File[],
 
 Sequencing per photo: decode → segment (+ crop/encode) → `chunk-scale` for
 that photo → `insert(...)` into the document → emit `photo-ready`. Each photo
-becomes one `pageBlock` whose `dir` is the upload's direction (§6.5 level 1).
+becomes one `pageBlock` whose `dir` is the upload's direction
+(`DESIGN.md` §6.5, level 1).
 
 The document is edited **per photo, as each completes** — not after the last
 one. That is FR8's "never freezes the interface" in its most literal form, and
@@ -1339,23 +1513,26 @@ it is why the batch path streams rather than collecting.
 ### 10.2 `attach-footnote.ts`
 
 ```ts
-export function attachFootnote(state: EditorState, dispatch: (tr: Transaction) => void,
-                               footnoteId: Id, sourcePageId: Id): boolean
+export function attachFootnote(id: Id): Command
 ```
 
-Inserts a `footnote_ref` node after the caret's chunk (or at the caret) and
-records `{ id, text: '', sourcePageId }` in plugin state. Returns `false` and
-changes nothing if there is no chunk at or before the caret in the current
-block — attaching a footnote to nothing is a disabled toolbar button, not an
-error.
+A plain ProseMirror `Command`. It derives everything from the selection: find
+the nearest `chunk` at or before the caret in the current block, take that
+node's `sourcePageId`, insert a `footnote_ref` immediately after it, and
+record `{ id, text: '', sourcePageId }` in plugin state via a transaction meta.
+Taking `sourcePageId` as a parameter instead would let the caller disagree with
+the document about which photo a footnote belongs to, and the discrepancy
+would only surface at export as a wrong number.
+
+Returns `false` and changes nothing when there is no such chunk — attaching a
+footnote to nothing is a disabled toolbar button, not an error.
 
 ### 10.3 `draw-box.ts`
 
 FR5. Given a rectangle in original photo coordinates:
 
-1. crop + encode via the worker (same `segment` job type with `crop: true` and
-   a pre-set box — the worker exposes a `crop-only` job, not a second
-   segmentation path);
+1. crop + encode via the worker, using the `{ type: 'crop' }` message (§7.4) —
+   one code path for producing a chunk's bytes, no re-segmentation;
 2. if the caret is inside the `pageBlock` for this `sourcePageId`, insert at
    the caret; otherwise append as a new paragraph at the end of that block
    (§4's FR5 interpretation);
@@ -1417,7 +1594,8 @@ Three panes, CSS grid: source panel (left, resizable, default 30%), editor
 export const schema = new Schema({
   nodes: {
     doc:      { content: 'pageBlock+' },
-    pageBlock:{ content: 'block+', group: 'block', defining: true,
+    // no group: pageBlock is legal only at doc level, never nested
+    pageBlock:{ content: 'block+', defining: true,
                 attrs: { sourcePageId: { default: '' }, dir: { default: 'ltr' } },
                 parseDOM: [{ tag: 'section[data-page-block]',
                              getAttrs: d => ({ sourcePageId: d.getAttribute('data-source') ?? '',
@@ -1425,14 +1603,18 @@ export const schema = new Schema({
                 toDOM: n => ['section', { 'data-page-block': '', 'data-source': n.attrs.sourcePageId,
                                           dir: n.attrs.dir }, 0] },
     paragraph:{ content: 'inline*', group: 'block', parseDOM: [{ tag: 'p' }], toDOM: () => ['p', 0] },
-    bullet_list: { content: 'list_item+', group: 'block', attrs: { tight: { default: false } } },
-    ordered_list: { content: 'list_item+', group: 'block', attrs: { order: { default: 1 } } },
+    bullet_list: { content: 'list_item+', group: 'block',
+                   parseDOM: [{ tag: 'ul' }], toDOM: () => ['ul', 0] },
+    ordered_list: { content: 'list_item+', group: 'block',
+                    attrs: { order: { default: 1 } },
+                    parseDOM: [{ tag: 'ol', getAttrs: d => ({
+                      order: Number(d.getAttribute('start') ?? 1) || 1 }) }],
+                    toDOM: n => ['ol', n.attrs.order === 1 ? {} : { start: n.attrs.order }, 0] },
     list_item: { content: 'paragraph block*', defining: true, parseDOM: [{ tag: 'li' }], toDOM: () => ['li', 0] },
     chunk:    { inline: true, group: 'inline', atom: true, draggable: false, selectable: true,
                 attrs: { chunkId: {}, sourcePageId: {}, inkW: {}, inkH: {},
                          inkOffsetY: {}, boxW: {}, boxH: {}, lineIndex: {}, baselineOffset: {} },
-                parseDOM: [{ tag: 'img[data-chunk-id]',
-                             getAttrs: d => attrsFrom(d) }],
+                parseDOM: [{ tag: 'img[data-chunk-id]', getAttrs: chunkAttrsFromDOM }],
                 toDOM: n => ['img', { 'data-chunk-id': n.attrs.chunkId,
                                       class: 'chunk', contenteditable: 'false',
                                       draggable: 'false',
@@ -1452,6 +1634,15 @@ list item must be a real paragraph — FR3 requires continuing a list with typed
 text, which is exactly the case that rules out the shortcut model
 `DESIGN.md` §6.1 rejects.
 
+Every node with a `parseDOM` rule has a `toDOM`, because copy/cut and paste
+round-trip through the DOM and an asymmetric pair loses content silently. The
+lists are the easy ones to forget and the only ones a user hits by accident
+(select a list, copy, paste somewhere, find bullets gone).
+
+`chunkAttrsFromDOM(d)` reads all eight numeric/string attrs off the element,
+falling back to `0` for missing numbers and returning `false` (which makes
+ProseMirror fall back to the node's defaults) when `data-chunk-id` is absent.
+
 E19: `parseDOM` matches on `data-chunk-id` and keeps the node even when the
 store has no bytes; the node view then renders a placeholder.
 
@@ -1460,16 +1651,36 @@ store has no bytes; the node view then renders a placeholder.
 `toDOM` cannot set `src` (it does not know the store), so a node view supplies
 it:
 
+A node view is a closure over the store and a **scale registry** the editor is
+constructed with:
+
 ```ts
-// inline: style.verticalAlign = 'baseline'
-//         style.marginBottom = `${-((boxH - inkOffsetY - inkH) * mmPerDocPx)}mm`
-//         style.width / style.height from computeChunkScale
+// ui/editor/scale-registry.ts — a Map<sourcePageId, ScaleResult>, owned by the
+// editor instance and mutated by import. Populated from computeChunkScale (§6.2)
+// per photo, which is why it is keyed by photo and not global (E5).
+export type ScaleRegistry = ReadonlyMap<Id, ChunkScaleResult>
+
+// node view, per chunk node:
+const scale = registry.get(node.attrs.sourcePageId)
+if (!scale) return placeholder                      // no photo -> no scale
+const size  = scale.sizes.get(node.attrs.chunkId)
+const padBelowMm = (node.attrs.boxH - node.attrs.inkOffsetY - node.attrs.inkH)
+                  * scale.scaleMmPerPx
+dom.style.verticalAlign  = 'baseline'
+dom.style.marginBottom   = `${-padBelowMm}mm`
+dom.style.width  = `${size.w}mm`
+dom.style.height = `${size.h}mm`
 ```
 
-`verticalAlign: 'baseline'` with a negative `margin-bottom` puts the *ink
-bottom* on the text baseline, which is what `DESIGN.md` §6.2 asks for: without
-it, a descender in the crop lifts the whole line. `contenteditable="false"` and
-`draggable="false"` are on the element (E/D4).
+`verticalAlign: 'baseline'` with a negative `margin-bottom` equal to the
+padding *below the ink* puts the ink bottom on the text baseline, which is what
+`DESIGN.md` §6.2 asks for: without it, a descender in the crop lifts the whole
+line. `contenteditable="false"` and `draggable="false"` are on the element
+(D4).
+
+The registry rather than a global is what keeps the editor testable: a test
+constructs an editor with a two-entry registry and a store, and renders a
+document with chunks from two photos, without touching module state.
 
 A missing chunk renders `<span class="chunk-missing">▯</span>` with a `title`
 naming the id (E14).
@@ -1490,13 +1701,17 @@ precisely because it touches nothing else.
 ### 11.5 `ui/editor/to-docview.ts`
 
 ```ts
-export function toDocView(state: EditorState, store: ChunkImageStore): DocView
+export function toDocView(state: EditorState): DocView
 ```
 
 Pure projection: reads the ProseMirror doc plus footnote plugin state, returns
-`DocView` with chunk geometry from the node attrs. This is the seam that keeps
-`pdf-lib` from ever importing ProseMirror, and it has a test that asserts
-`DocView` survives `structuredClone` unchanged.
+`DocView` with chunk geometry from the node attrs. It takes no store, because
+every number it needs is an attribute — if it ever needs the store, that means
+geometry has leaked out of the document, and the fix is a new node attr.
+
+This is the seam that keeps `pdf-lib` from ever importing ProseMirror, and it
+has a test that asserts `DocView` survives `structuredClone` unchanged — which is
+what makes it safe to post into the PDF worker (§7.4).
 
 ### 11.6 Source panel
 
@@ -1612,11 +1827,12 @@ and `tolerance` are filled in during M2 and never silently updated.
 
 - **HTML:** parse the exported string, assert structure and content without a
   DOM (regex + a tiny tag scanner). Assert no `http`, no `<script`.
-- **PDF:** use `pdfjs-dist` (already a dependency of the old build, and a
-  devDependency here) in the node project to extract text per page and compare
-  with the logical text of the source document. This is the only automated way
-  to catch "the Hebrew came out backwards", and it is the highest-value test in
-  the project.
+- **PDF:** use `pdfjs-dist` in the node project to extract text and compare it
+  with the source document's runs. This is the only automated way to catch "the
+  Hebrew came out backwards", and it is the highest-value test in the project.
+  `pdfjs-dist`'s Node entry needs its worker disabled
+  (`GlobalWorkerOptions.workerSrc = ''`); that one line is the difference
+  between a working test and a mysterious hang, so it is written down.
 - **Both:** given a `FakePagination` layout with distinctive coordinates, assert
   each renderer emits those coordinates.
 
@@ -1668,13 +1884,13 @@ protects every later hour.
 ### M1 — Domain and ports
 **Goal:** types, ids, chunk-scale, footnote numbering, the five port interfaces,
 and the three fakes.
-**Exit:** `npm test` green; every §6.1–6.3 test present; `domain/` imports
+**Exit:** `npm test` green; every §6.0–6.3 test present; `domain/` imports
 nothing outside itself (assert with a source-text test over the directory).
 
 ### M2 — Segmentation
 **Goal:** `segmentSync` works end to end on synthetic buffers.
-**This is the highest-risk milestone in the project.** Segments 11 stages of
-image code whose only real judge is a photograph.
+**This is the highest-risk milestone in the project.** Ten stages of image
+code whose only real judge is a photograph.
 **Exit:** every §6.5–6.13 test green, including the three real fixtures with
 recorded tolerances, the `pipeline.ts` no-literals assertion, the no-recognition
 grep, and the deliberate-degradation test proving the fixture test can go red.
@@ -1725,7 +1941,9 @@ test. Do not add a fallback renderer (D14).
 ### M9 — Stress route
 **Goal:** `?stress=N` through the real pipeline, with the report panel.
 **Exit:** §11.7 procedure runs at N=20 and N=100; results recorded in
-`docs/PERFORMANCE.md`, replacing the previous implementation's file.
+`docs/PERFORMANCE.md`. That file does not exist in this repository — the old
+one went to `scrivio_old` with the rest of the previous implementation — so this
+milestone creates it.
 
 ### M10 — e2e
 **Goal:** the six specs in §12.5.
@@ -1766,7 +1984,7 @@ Every acceptance item, traced to the milestone and the tests that prove it.
 |---|---|---|---|
 | 1 | Install, run the offline test command, build | M0 | `docker run --network none` exits 0; `npm test` green |
 | 2 | Photo → chunks, boxes on the source panel | M2, M3, M4, M5 | §6.13 fixtures; §7.4; §11.6 |
-| 3 | Type between chunks, delete one, draw a box | M4, M5 | §11.2–11.5 jsdom tests; §10.3 |
+| 3 | Type between chunks, delete one, draw a box | M4, M5 | §11.2–11.5 jsdom tests; §10.3; §12.5 spec 3 |
 | 4 | Three chunks as a bulleted list; footnote with marker and numbered entry at the bottom of that page | M4, M6 | §11.4; §6.3; §8.2 (export-side numbering) |
 | 5 | Export HTML and PDF, both open offline, both complete | M7, M8 | §9.2 (no `http`), §12.3 (PDF text extraction), §12.5 |
 | 6 | `?stress=100` types and scrolls without lag | M9 | §11.7 report; `docs/PERFORMANCE.md` |
@@ -1775,8 +1993,8 @@ Requirement-level trace:
 
 | SRS | Where |
 |---|---|
-| FR1 direction per upload | §10.1, §6.5 |
-| FR2 pages per photo, no reflow, photos appendable | §6.1 (`pageBlock`), §10.1 |
+| FR1 direction per upload | §10.1 (per upload), §4 (`DocBlock.dir`), §10.4 (per block) |
+| FR2 pages per photo, no reflow, photos appendable | §4 (`pageBlock`), §10.1 |
 | FR3 lists mixing chunks and typed text | §11.2 (`list_item` contains `paragraph`), §11.8 |
 | FR4 footnotes, restart per page | §6.3 (editor side), §8.2 (export side) |
 | FR5 draw a box | §10.3, §11.6 |
@@ -1794,15 +2012,16 @@ Requirement-level trace:
 |---|---|---|
 | 1 | **Playwright is retained** as `npm run e2e`, excluded from `npm test` and from the Docker `CMD` (E10). D10 said exclude it entirely. | Agreed. Acceptance 2–6 keep automated coverage; the single-command offline rebuild is unaffected because nothing invokes Playwright. `DESIGN.md` D10 and §12 have been updated to match. |
 | 2 | **Fixtures are 4.2 MB**, not the "100–200 KB each" `DESIGN.md` §10 estimated. | Raw 8-bit luma of three real photographs, long edge capped at 1600 px. Keeping them raw avoids a decoder in `npm test`; shrinking them further starts to alter stroke detail, which is the thing the fixture exists to measure. |
-| 3 | **`pdf-lib` embeds the font without subsetting** (E1). | Removes the pdf-lib #688 blank-glyph failure class rather than mitigating it. |
 | 4 | **Chunk-scale is per photo**, not per document (E5). | A strict generalisation of §8.2, needed as soon as two photos in one document have different pixel widths. |
+| 5 | **The HTML export reproduces the paginated layout** with absolutely positioned lines, rather than emitting reflowing semantic markup (E20). | `DESIGN.md` §9 requires the two renderers to differ only in how they draw, and acceptance 5 compares the files. Not recorded here, it would have been discovered as "the HTML and the PDF don't quite match". |
+| 6 | **`pdf-lib` font embedding uses `subset: false` and the full static font** (E1), where `DESIGN.md` §8.4 implies subsetting. | Removes the pdf-lib #688 blank-glyph failure class outright rather than mitigating its probability. |
 
 ### 15.2 Risks carried into implementation
 
 | Risk | Where it is answered | Residual |
 |---|---|---|
 | Segmentation regresses on real photographs | §6.13 fixtures with recorded tolerances, plus a test that proves they can go red | Tolerance must be set from a real run, not guessed; a fixture recorded too loosely guards nothing |
-| Hebrew PDF renders reversed | §8.3 `visualRuns`, §9.3, §12.3 text extraction | Only Latin/Hebrew/digits/parentheses are covered. Other RTL scripts are non-joining too, but their *punctuation and shaping* are not verified |
+| Hebrew PDF renders reversed | §8.3 `visualRuns`, §9.3, §12.3 text extraction | Only Latin/Hebrew/digits/parentheses are covered, because only those are tested. Arabic and other joining RTL scripts are **out of scope entirely** (D14) — they would need a shaping engine, and being RTL is not sufficient |
 | Font embeds and renders blank | E1 `subset: false`, §9.5 coverage test, one real-viewer check in M8 | A viewer that disagrees with `pdfjs-dist` is still possible; the M8 manual check is what catches it |
 | ProseMirror paste/undo of chunks misbehaves | §11.2 parse rules, `draggable: false`, jsdom round-trip tests | Real drag-and-drop is hard to test in jsdom; covered only by e2e |
 | Large HTML export exhausts memory | §9.2 part-array + `Blob`, §9.6 | 25 MB of `BlobPart` is fine on desktop, marginal on a phone — the SRS does not require mobile |
@@ -1825,4 +2044,3 @@ Recorded now, while they are hypothetical, because each will look correct:
    per-run x positions *after* bidi rather than before — a change to the type in
    §4, and therefore a change to this document, made deliberately rather than
    discovered in the renderer.
-
