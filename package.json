@@ -1,0 +1,46 @@
+{
+  "name": "scrivio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium"
+  },
+  "dependencies": {
+    "bidi-js": "1.0.3",
+    "pdf-lib": "1.17.1",
+    "prosemirror-commands": "1.7.1",
+    "prosemirror-history": "1.4.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-model": "1.25.3",
+    "prosemirror-schema-list": "1.5.1",
+    "prosemirror-state": "1.4.3",
+    "prosemirror-transform": "1.10.4",
+    "prosemirror-view": "1.41.1",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0",
+    "@testing-library/jest-dom": "6.8.0",
+    "@testing-library/react": "16.3.0",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "24.5.2",
+    "@types/react": "19.1.13",
+    "@types/react-dom": "19.1.9",
+    "@vitejs/plugin-react": "5.0.4",
+    "fontkit": "2.0.4",
+    "jsdom": "26.1.0",
+    "pdfjs-dist": "5.4.149",
+    "typescript": "5.9.2",
+    "vite": "7.1.7",
+    "vitest": "3.2.4"
+  }
+}
