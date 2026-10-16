@@ -1,7 +1,10 @@
 {
-  "files": [],
-  "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
+  "extends": "./tsconfig.app.json",
+  "include": [
+    "src",
+    "tests",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts"
   ]
 }
